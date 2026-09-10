@@ -8,7 +8,9 @@
 pyproject.toml            # ruff / mypy(strict) / pytest 設定
 README.md                 # 実行・検証コマンド
 content/                  # 定義データ(YAML)。コードにゲーム固有値を置かない
+  pack.yaml               # 定義版(version)
   axes.yaml               # 軸定義(§4): 好感度(latent)・友情度・恋愛度
+  traits.yaml             # 性格タグ(solo属性)の登録。参照検証用
   tracks.yaml             # トラック定義(§6): 友情(none)・恋愛(none→lovers)
   events.yaml             # イベント定義(§16): 出会い/通常交流/ときめき/告白/再告白/日次
   affinity.yaml           # 相性ルール(§21)
@@ -75,9 +77,10 @@ tests/
 |---|---|
 | `AxisDef` | id, layer(directed), role(expressed/latent), range(min,max), initial, bands(expressedのみ)。latentにbandsがあれば検証エラー |
 | `TrackDef` | id, states(順序付き), initial, transitions[{from,to,meaning: promote/demote/dissolve}] (§17: 意味を明記) |
-| `EventDef` | id, kind, participants(roles), shape(directed / pair: 候補の正規化方法), occurrence(条件・重み), cooldown{scope: actor_to_target/pair, days}, outcomes(結果種別ごとのdelta/遷移/fact定義), observer_policy, content_rating(sfw固定。nsfwは型のみ予約) |
-| `ResponseRule` | 告白の受諾条件(受け手→告白者の恋愛有効値の閾値など)。受諾/拒否それぞれの結果定義へ分岐 |
-| `FactSpec` | result_kind → fact kind, audience(public/participants_only/explicit), track/state_after。開示範囲は定義データ側に置き、全告白共通の規則にしない |
+| `EventDef` | id, shape(directed / pair / world: 候補の正規化方法), roles, trigger(lottery / daily), occurrence(条件・重み), cooldown{scope: actor_to_target/pair, days, after_outcomes}, outcomes, observer_policy, content_rating(sfw固定。nsfwは型のみ予約) |
+| `OutcomeDef` | 結果分岐。定義順に when を評価し最初に成立した分岐を採用(告白の受諾/拒否はこれで決定的に判定)。最後は条件なしの既定分岐 |
+| `ResultSpec` | 1分岐から複数の成立結果を作る(告白経験と関係成立は別)。kind, success, deltas, transition, establish_acquaintance, facts |
+| `FactSpec` | fact kind, audience(public/participants_only/explicit), recipients。開示範囲は定義データ側に置き、全告白共通の規則にしない |
 | `AffinityRule` | id, when{a_has,b_has}, value, symmetric |
 | `TemplateDef` | result_kind(+成否), variants[str](順序付き)。プレースホルダは参加者名・帯ラベルのみ |
 | `Settings` | ticks_per_day, event_slots_per_day, max_real_elapsed_seconds(クランプ上限), 進行速度の既定値 |
@@ -130,8 +133,8 @@ tests/
 
 ## 3. マイルストーンごとの要点
 
-- **M1**(完了) pyproject、`ruff check`, `mypy --strict`, `pytest` が空パッケージで通る。
-- **M2** YAMLスキーマ+ローダ+検証。検証エラー: range逸脱、初期値がrange外、未知の軸/トラック/状態/イベント/性格タグ参照、latentへのbands付与、遷移の意味欠落、テンプレの未知プレースホルダ、variants空。
+- **M1**(完了) pyproject、`ruff check`, `mypy --strict`, `pytest` が空パッケージで通る。`[project.scripts]` は M6 で実体と同時に追加する。
+- **M2**(完了) YAMLスキーマ+ローダ+検証。検証エラー: range逸脱、初期値がrange外、未知の軸/トラック/状態/イベント/性格タグ参照、latentへのbands付与、遷移の意味欠落、テンプレの未知プレースホルダ、variants空。
 - **M3** 上記モデル。面識はpairの成立結果参照として保持し、友情状態と独立(§6)。`ResultId`・`FactId` は保存される整数連番。
 - **M4** `compat(a, b, rules)`: 該当ruleの総和をclamp(-100,100)。symmetricは正順/逆順どちらかが一致すれば1回のみ加算。solo変化で再計算(キャッシュなし、都度計算)。
 - **M5** イベントとfact:

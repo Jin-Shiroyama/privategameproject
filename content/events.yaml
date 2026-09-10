@@ -1,0 +1,126 @@
+# イベント定義(§16)。数値(delta量・閾値・クールダウン日数・重み)はすべて検証用の仮値。
+#
+# 共通の約束:
+# - shape: directed の役割は [actor, target]、pair は参加者IDをソートして1候補に正規化する
+# - outcomes は定義順に when を評価し、最初に成立した分岐を採用する。最後は条件なしの既定分岐
+# - 返答(告白の受諾/拒否)は開始時点の値で決める決定的判定。追加抽選はしない(§16)
+# - fact は results に付く。開示範囲(audience)は定義データ側で決める(§19)
+# - observer_policy: others_present は「初期キャラ全員が同じ場にいる」検証用前提での同席候補(§19)
+events:
+  # 出会い: 面識の成立。友情状態は変更しない(§16)
+  - id: meet
+    name: 出会い
+    shape: pair
+    roles: [a, b]
+    observer_policy: others_present
+    occurrence:
+      weight: 20
+      when:
+        - { type: not_acquainted }
+    outcomes:
+      - id: met
+        results:
+          - kind: met
+            establish_acquaintance: true
+            facts:
+              - { kind: met, audience: public }
+
+  # 通常交流: 好感度(latent)を双方向に加える。内部deltaのみで fact は作らない
+  - id: chat
+    name: 通常交流
+    shape: pair
+    roles: [a, b]
+    observer_policy: others_present
+    occurrence:
+      weight: 30
+      when:
+        - { type: acquainted }
+    outcomes:
+      - id: chatted
+        results:
+          - kind: interaction
+            deltas:
+              - { from: a, to: b, axis: favor, value: 4 }
+              - { from: b, to: a, axis: favor, value: 4 }
+              - { from: a, to: b, axis: friendship, value: 2 }
+              - { from: b, to: a, axis: friendship, value: 2 }
+
+  # ときめき: 好感度または相性を根拠に片側の恋愛度を上げる(§6)。恋人状態にはしない。
+  # 内面の恋慕なので fact を生成しない(§19)
+  - id: crush
+    name: ときめき
+    shape: directed
+    roles: [actor, target]
+    observer_policy: none
+    occurrence:
+      weight: 10
+      when:
+        - { type: acquainted }
+        - { type: track_is, track: romance, state: none }
+        - type: any
+          of:
+            - { type: axis_at_least, axis: favor, from: actor, to: target, value: 12 }
+            - { type: compat_at_least, from: actor, to: target, value: 20 }
+    outcomes:
+      - id: crushed
+        results:
+          - kind: infatuation
+            deltas:
+              - { from: actor, to: target, axis: romance, value: 15 }
+
+  # 告白: 発生は抽選、返答は target→actor の恋愛有効値による決定的判定(§16)。
+  # 受諾時は「告白(成功)」と「関係成立」を別の結果として記録する。
+  # 発言は public、返答は participants_only(§22 ①: 開示先の分離)
+  - id: confession
+    name: 告白
+    shape: directed
+    roles: [actor, target]
+    observer_policy: others_present
+    occurrence:
+      weight: 6
+      when:
+        - { type: acquainted }
+        - { type: track_is, track: romance, state: none }
+        - { type: axis_at_least, axis: romance, from: actor, to: target, value: 40 }
+        - { type: cooldown_elapsed }
+    cooldown:
+      scope: actor_to_target
+      days: 3
+      after_outcomes: [rejected]
+    outcomes:
+      - id: accepted
+        when:
+          - { type: axis_at_least, axis: romance, from: target, to: actor, value: 30 }
+        results:
+          - kind: confession
+            success: true
+            deltas:
+              - { from: target, to: actor, axis: romance, value: 5 }
+            facts:
+              - { kind: confession_made, audience: public }
+              - { kind: confession_accepted, audience: participants_only }
+          - kind: relationship_established
+            success: true
+            transition: { track: romance, to: lovers }
+            facts:
+              - { kind: relationship_established, audience: public }
+      - id: rejected
+        results:
+          - kind: confession
+            success: false
+            deltas:
+              - { from: actor, to: target, axis: romance, value: -5 }
+            facts:
+              - { kind: confession_made, audience: public }
+              - { kind: confession_rejected, audience: participants_only }
+
+  # 日次処理: 日境界で必ず1件。第①段階では履歴化のみ(降格・持続判定は第③段階)
+  - id: daily
+    name: 日次処理
+    shape: world
+    trigger: daily
+    observer_policy: none
+    outcomes:
+      - id: day_closed
+        results:
+          - kind: day_closed

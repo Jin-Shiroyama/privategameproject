@@ -1,0 +1,35 @@
+# 軸定義(§4)。第①段階の検証用: 好感度(latent)・友情度・恋愛度(expressed)
+axes:
+  - id: favor
+    name: 好感度
+    layer: directed
+    role: latent
+    range: [-100, 100]
+    initial: 0
+    description: "感情そのものではなく、蓄積してイベントや状態遷移のきっかけになる内部進行値。LLMには渡さない"
+
+  - id: friendship
+    name: 友情度
+    layer: directed
+    role: expressed
+    range: [-100, 100]
+    initial: 0
+    bands:
+      - { min: 60,   label: "親友級",  hint: "何でも話せる。頼られると嬉しい" }
+      - { min: 20,   label: "友好",    hint: "気軽に声をかける" }
+      - { min: -20,  label: "中立",    hint: "距離を保つ" }
+      - { min: -100, label: "疎遠",    hint: "会話を避ける" }
+    description: "友情観点の言動に反映される。恋愛度とは独立"
+
+  - id: romance
+    name: 恋愛度
+    layer: directed
+    role: expressed
+    range: [-100, 100]
+    initial: 0
+    bands:
+      - { min: 60,   label: "恋慕",    hint: "相手を意識し、二人になる機会を探す" }
+      - { min: 30,   label: "好意",    hint: "相手の言動が気になる" }
+      - { min: -20,  label: "無関心",  hint: "恋愛対象として見ていない" }
+      - { min: -100, label: "拒絶",    hint: "恋愛的な接近を避ける" }
+    description: "文字通りの恋愛的感情。友情や好感度を共通の前提にしない(§4)"

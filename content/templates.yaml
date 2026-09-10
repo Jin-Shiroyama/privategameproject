@@ -1,0 +1,42 @@
+# テンプレートログ(§2)。文面は乱数を消費せず result_id % バリエーション数 で選ぶ。
+# プレースホルダはイベントの役割名({a} {b} {actor} {target})と {day} のみ
+templates:
+  - result_kind: met
+    variants:
+      - "{a}「はじめまして。{b}さん、ですよね」 {b}「ええ。よろしく」"
+      - "{b}「あ、{a}さん? 話には聞いてました」 {a}「こちらこそ」"
+      - "{a}と{b}が初めて言葉を交わした。"
+
+  - result_kind: interaction
+    variants:
+      - "{a}「今日は暇?」 {b}「まあ、それなりに」 {a}「じゃあ少し付き合ってよ」"
+      - "{b}「この前の話、覚えてる?」 {a}「もちろん」"
+      - "{a}と{b}がしばらく雑談していた。"
+      - "{b}「{a}ってさ、意外と真面目だよね」 {a}「意外は余計」"
+
+  - result_kind: infatuation
+    variants:
+      - "{actor}は、ふとした{target}の仕草に目を奪われた。"
+      - "{actor}「……なんだろう、この感じ」"
+      - "{actor}は{target}のことを考えている自分に気づいた。"
+
+  - result_kind: confession
+    success: true
+    variants:
+      - "{actor}「……好きです。付き合ってください」 {target}「はい。私も、そう思ってました」"
+      - "{actor}「ずっと言えなかったけど、好きだ」 {target}「……遅いよ。でも、うん」"
+
+  - result_kind: confession
+    success: false
+    variants:
+      - "{actor}「好きです」 {target}「……ごめんなさい。今はそういう気持ちにはなれない」"
+      - "{actor}「付き合ってほしい」 {target}「気持ちは嬉しい。でも、答えられない」"
+
+  - result_kind: relationship_established
+    variants:
+      - "{actor}と{target}は恋人になった。"
+      - "この日、{actor}と{target}は交際を始めた。"
+
+  - result_kind: day_closed
+    variants:
+      - "―― {day}日目が終わった ――"

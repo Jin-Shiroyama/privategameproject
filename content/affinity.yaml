@@ -1,0 +1,14 @@
+# 相性ルール(§21)。compat(A→B) = clamp(該当ルールの value 総和, -100, 100)。数値は検証用
+affinity_rules:
+  - id: caretaker_pampered
+    when: { a_has: caretaker, b_has: pampered }
+    value: 20
+    symmetric: true
+  - id: neat_vs_sloppy
+    when: { a_has: neat, b_has: sloppy }
+    value: -20
+    symmetric: true
+  - id: sociable_pair
+    when: { a_has: sociable, b_has: sociable }
+    value: 10
+    symmetric: true

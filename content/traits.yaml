@@ -1,0 +1,7 @@
+# 性格タグ(solo属性)。検証用
+traits:
+  - { id: caretaker, name: 世話好き, description: "人の面倒を見たがる" }
+  - { id: pampered,  name: 甘え上手, description: "人に頼るのがうまい" }
+  - { id: neat,      name: 潔癖,     description: "整理整頓と清潔さにこだわる" }
+  - { id: sloppy,    name: ずぼら,   description: "細かいことを気にしない" }
+  - { id: sociable,  name: 社交的,   description: "誰とでもすぐ打ち解ける" }

@@ -1,0 +1,16 @@
+# トラック定義(§6)。遷移の意味(promote/demote/dissolve)は状態名の並びから推定せず明記する(§17)
+tracks:
+  # 友情トラック: 第①段階では定義のみ。段階・閾値は未決(§13)のため「友情関係なし」のみ
+  - id: friendship
+    name: 友情
+    states: [none]
+    initial: none
+    transitions: []
+
+  # 恋愛トラック: 最小構成「恋愛関係なし→恋人」(§6 確定)。降格・解消は第③段階
+  - id: romance
+    name: 恋愛
+    states: [none, lovers]
+    initial: none
+    transitions:
+      - { from: none, to: lovers, meaning: promote }

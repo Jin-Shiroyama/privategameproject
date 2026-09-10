@@ -1,0 +1,5 @@
+# 進行設定(§8)。数値は検証用
+ticks_per_day: 24              # 1tick = ゲーム内1時間
+event_slots_per_day: 8         # 3tickごとに1スロット(抽選)
+real_seconds_per_game_day: 120 # 進行速度: 1ゲーム日 = 実時間120秒
+max_real_elapsed_seconds: 2.0  # 実測経過時間のクランプ上限(§8)

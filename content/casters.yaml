@@ -1,0 +1,5 @@
+# 検証用キャラ(全員成人Caster、§10)
+casters:
+  - { id: aoi,    name: 葵,   traits: [caretaker, sociable] }
+  - { id: haru,   name: 春,   traits: [pampered, sloppy] }
+  - { id: mizuki, name: 瑞希, traits: [neat, sociable] }

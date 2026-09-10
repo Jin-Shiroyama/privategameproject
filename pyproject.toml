@@ -17,9 +17,6 @@ dev = [
   "types-PyYAML>=6.0",
 ]
 
-[project.scripts]
-kankei = "kankei.cli:main"
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
