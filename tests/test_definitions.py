@@ -337,3 +337,53 @@ def test_caster_duplicate_id(mutated_pack: MakePack) -> None:
         d["casters"][1]["id"] = "aoi"
 
     _expect_error(mutated_pack, "casters.yaml", mutate, "IDが重複")
+
+
+@pytest.mark.parametrize("key", ["real_seconds_per_game_day", "max_real_elapsed_seconds"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0, 0])
+def test_settings_time_values_must_be_finite_positive(
+    mutated_pack: MakePack, key: str, value: float
+) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d[key] = value
+
+    _expect_error(mutated_pack, "settings.yaml", mutate, "有限|正の数")
+
+
+@pytest.mark.parametrize("text", ["{a:{ghost}}", "{a!z}", "{a:d}", "{a!r}"])
+def test_template_rejects_format_and_conversion(mutated_pack: MakePack, text: str) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["templates"][0]["variants"].append(text)
+
+    _expect_error(mutated_pack, "templates.yaml", mutate, "書式指定・変換指定")
+
+
+def test_template_rejects_broken_format(mutated_pack: MakePack) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["templates"][0]["variants"].append("{a")
+
+    _expect_error(mutated_pack, "templates.yaml", mutate, "テンプレート書式が不正")
+
+
+def test_duplicate_yaml_key_is_rejected(tmp_path: Path, content_dir: Path) -> None:
+    import shutil
+
+    target = tmp_path / "content"
+    shutil.copytree(content_dir, target)
+    settings = target / "settings.yaml"
+    settings.write_text(
+        settings.read_text(encoding="utf-8") + "\nmax_real_elapsed_seconds: 999\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(DefinitionError, match=r"settings\.yaml.*キーが重複"):
+        load_content_pack(target)
+
+
+def test_broken_yaml_becomes_definition_error(tmp_path: Path, content_dir: Path) -> None:
+    import shutil
+
+    target = tmp_path / "content"
+    shutil.copytree(content_dir, target)
+    (target / "axes.yaml").write_text("axes: [\n  - id: x\n", encoding="utf-8")
+    with pytest.raises(DefinitionError, match=r"axes\.yaml.*YAMLを読み込めません"):
+        load_content_pack(target)

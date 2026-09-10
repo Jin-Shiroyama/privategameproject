@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 import string
 from collections.abc import Iterable, Sequence
 from enum import StrEnum
@@ -124,7 +125,10 @@ def _int(obj: object, path: str) -> int:
 def _float(obj: object, path: str) -> float:
     if isinstance(obj, bool) or not isinstance(obj, int | float):
         raise DefinitionError(path, "数値が必要です")
-    return float(obj)
+    value = float(obj)
+    if not math.isfinite(value):
+        raise DefinitionError(path, "有限の数値が必要です(nan・inf は不可)")
+    return value
 
 
 def _bool(obj: object, path: str) -> bool:
@@ -174,12 +178,33 @@ def _unique_ids(ids: Sequence[str], path: str) -> None:
         seen.add(item)
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """同じマッピング内のキー重複を拒否する SafeLoader。後勝ちで黙って上書きしない。"""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[object] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str | int | float | bool | None):
+                continue
+            if key in seen:
+                mark = key_node.start_mark
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"キーが重複しています: {key!r}", mark
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 def _read_yaml(directory: Path, name: str) -> dict[str, Any]:
     file_path = directory / name
     if not file_path.is_file():
         raise DefinitionError(name, "定義ファイルが見つかりません")
-    with file_path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with file_path.open(encoding="utf-8") as f:
+            data = yaml.load(f, Loader=_StrictLoader)  # SafeLoader 派生
+    except yaml.YAMLError as exc:
+        raise DefinitionError(name, f"YAMLを読み込めません: {exc}") from None
     return _as_map(data, name)
 
 
@@ -685,11 +710,15 @@ def _parse_events(
 def _placeholders(text: str, path: str) -> set[str]:
     names: set[str] = set()
     try:
-        for _, field_name, _, _ in string.Formatter().parse(text):
+        for _, field_name, format_spec, conversion in string.Formatter().parse(text):
             if field_name is None:
                 continue
             if not field_name or not field_name.isidentifier():
                 raise DefinitionError(path, f"不正なプレースホルダ '{{{field_name}}}'")
+            if format_spec or conversion is not None:
+                raise DefinitionError(
+                    path, f"プレースホルダ '{{{field_name}}}' に書式指定・変換指定は使えません"
+                )
             names.add(field_name)
     except ValueError as exc:
         raise DefinitionError(path, f"テンプレート書式が不正です: {exc}") from None
