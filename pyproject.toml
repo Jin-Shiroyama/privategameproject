@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kankei"
+version = "0.1.0"
+description = "CUI・チャットベースの放置型 関係性観察ゲーム(第①段階 試作)"
+requires-python = ">=3.12"
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+kankei = "kankei.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # 日本語の全角記号を許容
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
