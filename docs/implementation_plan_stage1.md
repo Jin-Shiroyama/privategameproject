@@ -136,7 +136,7 @@ tests/
 - **M1**(完了) pyproject、`ruff check`, `mypy --strict`, `pytest` が空パッケージで通る。`[project.scripts]` は M6 で実体と同時に追加する。
 - **M2**(完了) YAMLスキーマ+ローダ+検証。検証エラー: range逸脱、初期値がrange外、未知の軸/トラック/状態/イベント/性格タグ参照、latentへのbands付与、遷移の意味欠落、テンプレの未知プレースホルダ、variants空。
 - **M3**(完了) 上記モデル。面識はpairの成立結果参照として保持し、友情状態と独立(§6)。`ResultId`・`FactId` は保存される整数連番。`WorldState.commit` はバッチ全体を先に検証し、失敗時は何も更新しない(`CommitError`)。事前検証は適用段で拒否され得る条件(自己参照delta・未知の軸・非正規化ペアキー・開示先外の直接認知・viaの不整合)をすべて先回りする。万一、検証通過後の適用中に例外が起きた場合は `FatalCommitError` とし `integrity_failure` に記録する。以後その世界状態は確定を受け付けず、M7の保存側もこのフラグが立っていれば保存せず停止する(壊れた状態をセーブに混入させない)。
-- **M4** `compat(a, b, rules)`: 該当ruleの総和をclamp(-100,100)。symmetricは正順/逆順どちらかが一致すれば1回のみ加算。solo変化で再計算(キャッシュなし、都度計算)。
+- **M4**(完了) `compat(a, b, rules)`: 該当ruleの総和をclamp(-100,100)。symmetricは正順/逆順どちらかが一致すれば1回のみ加算。solo変化で再計算(キャッシュなし、都度計算)。`applied_rules` で寄与ルールを神視点表示用に列挙できる。
 - **M5** イベントとfact:
   - 出会い: 面識成立。fact `met`(public)。
   - 通常交流: 好感度delta。factなし(内部delta)。
