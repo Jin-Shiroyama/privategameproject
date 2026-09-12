@@ -13,6 +13,7 @@ from kankei.model.world import (
     CommitError,
     CooldownKey,
     CooldownUpdate,
+    FatalCommitError,
     PairChange,
     WorldState,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "EventResult",
     "Fact",
     "FactId",
+    "FatalCommitError",
     "GameTime",
     "Knowledge",
     "KnowledgeVia",

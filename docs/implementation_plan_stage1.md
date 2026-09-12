@@ -135,7 +135,7 @@ tests/
 
 - **M1**(完了) pyproject、`ruff check`, `mypy --strict`, `pytest` が空パッケージで通る。`[project.scripts]` は M6 で実体と同時に追加する。
 - **M2**(完了) YAMLスキーマ+ローダ+検証。検証エラー: range逸脱、初期値がrange外、未知の軸/トラック/状態/イベント/性格タグ参照、latentへのbands付与、遷移の意味欠落、テンプレの未知プレースホルダ、variants空。
-- **M3**(完了) 上記モデル。面識はpairの成立結果参照として保持し、友情状態と独立(§6)。`ResultId`・`FactId` は保存される整数連番。`WorldState.commit` はバッチ全体を先に検証し、失敗時は何も更新しない。
+- **M3**(完了) 上記モデル。面識はpairの成立結果参照として保持し、友情状態と独立(§6)。`ResultId`・`FactId` は保存される整数連番。`WorldState.commit` はバッチ全体を先に検証し、失敗時は何も更新しない(`CommitError`)。事前検証は適用段で拒否され得る条件(自己参照delta・未知の軸・非正規化ペアキー・開示先外の直接認知・viaの不整合)をすべて先回りする。万一、検証通過後の適用中に例外が起きた場合は `FatalCommitError` とし `integrity_failure` に記録する。以後その世界状態は確定を受け付けず、M7の保存側もこのフラグが立っていれば保存せず停止する(壊れた状態をセーブに混入させない)。
 - **M4** `compat(a, b, rules)`: 該当ruleの総和をclamp(-100,100)。symmetricは正順/逆順どちらかが一致すれば1回のみ加算。solo変化で再計算(キャッシュなし、都度計算)。
 - **M5** イベントとfact:
   - 出会い: 面識成立。fact `met`(public)。
@@ -155,6 +155,7 @@ tests/
 - **M7** 保存と受け入れテスト:
   - スナップショット: WorldState + GameTime + `random.getstate()` + 処理済みスロット位置(明示保存) + 未処理作業(①段階では空だが枠を保存) + applied_event_ids + ID採番の次値 + 定義版。
   - 保存できるタイミングはスロット処理の間(直前の `commit` 完了後、次の抽選前)のみ。確定単位の途中では保存しない。
+  - `WorldState.integrity_failure` が設定されている世界は保存しない(FatalCommitError 後は停止し、直前の正常なセーブを残す)。
   - 書込みは同一ファイルシステムの一時ファイル→fsync→`os.replace`。
   - 完成条件:
     1. `commit` 途中で検証に失敗しても、世界状態の一部だけが更新されない(検証を先に完了してから差し替える)。

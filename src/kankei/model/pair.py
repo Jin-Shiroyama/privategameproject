@@ -60,6 +60,9 @@ class PairStore:
         self._states: dict[PairKey, PairState] = {}
         if states:
             for key, state in states.items():
+                if key != state.key:
+                    raise ValueError(f"辞書のキー {key} と state.key {state.key} が一致しません")
+                self.validate(state)
                 self._states[key] = state.copy()
 
     def _default(self, key: PairKey) -> PairState:
@@ -72,7 +75,13 @@ class PairStore:
         return state.copy() if state is not None else self._default(key)
 
     def validate(self, state: PairState) -> None:
-        """登録可能か検証する(未知のトラック・状態を拒否)。状態は変更しない。"""
+        """登録可能か検証する。状態は変更しない。
+
+        - キーは異なる2名の正規化済み(ソート済み)ペアであること。逆順・自己ペアは拒否する
+        - トラックの集合が定義と一致し、各状態が定義済みであること
+        """
+        if len(state.key) != 2 or state.key != pair_key(*state.key):
+            raise ValueError(f"ペアキーが正規化されていません: {state.key}")
         if set(state.track_states) != set(self._tracks):
             raise KeyError("トラックの集合が定義と一致しません")
         for track_id, value in state.track_states.items():
