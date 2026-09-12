@@ -14,7 +14,7 @@ from kankei.definitions.schema import ContentPack
 from kankei.model.caster import Caster
 from kankei.model.clock import GameTime
 from kankei.model.directed import DirectedStore, EffectiveValueResolver
-from kankei.model.fact import Fact, Knowledge
+from kankei.model.fact import Fact, Knowledge, KnowledgeVia
 from kankei.model.history import AppliedDelta
 from kankei.model.ids import CasterId, EventInstanceId, FactId
 from kankei.model.pair import PairKey, PairState, PairStore
@@ -25,6 +25,14 @@ type CooldownKey = tuple[str, tuple[CasterId, ...]]
 
 class CommitError(Exception):
     """一括確定の検証失敗。世界状態は変更されない。"""
+
+
+class FatalCommitError(Exception):
+    """検証を通過した後の適用中に例外が起きた(修復不能)。
+
+    事前検証と適用の対応がずれた場合にのみ起こる。世界状態は部分更新されている可能性があるため、
+    `WorldState.integrity_failure` に記録し、ランタイム側は保存せず停止する。
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +82,7 @@ class WorldState:
     next_result_id: int = 1
     next_fact_id: int = 1
     next_commit_seq: int = 1
+    integrity_failure: str | None = None
 
     @classmethod
     def new(cls, pack: ContentPack, resolver: EffectiveValueResolver | None = None) -> WorldState:
@@ -112,6 +121,8 @@ class WorldState:
 
     def validate(self, batch: CommitBatch) -> None:
         """バッチ全体を検証する。失敗時は CommitError。状態は変更しない。"""
+        if self.integrity_failure is not None:
+            raise CommitError(f"世界状態は修復不能です: {self.integrity_failure}")
         if batch.commit_seq != self.next_commit_seq:
             raise CommitError(
                 f"確定順が不正です: expected {self.next_commit_seq}, got {batch.commit_seq}"
@@ -156,9 +167,12 @@ class WorldState:
                 raise CommitError("delta の元結果が同じバッチにありません")
 
     def _validate_deltas(self, deltas: Iterable[AppliedDelta]) -> None:
+        # 適用段 DirectedStore.set_stored が拒否する条件(自己参照・未知の軸)を先に拒否する
         # 同じ (source, target, axis) に複数の delta がある場合は順に連鎖することを検証する
         current: dict[tuple[CasterId, CasterId, str], int] = {}
         for d in deltas:
+            if d.source == d.target:
+                raise CommitError(f"自分自身への delta は持てません: {d.source}")
             if d.source not in self.casters or d.target not in self.casters:
                 raise CommitError(f"未知のキャラへの delta: {d.source}->{d.target}")
             if d.axis not in self.directed.axes:
@@ -192,10 +206,19 @@ class WorldState:
                 raise CommitError(f"ペア状態が不正です: {state.key}: {exc}") from None
 
     def _validate_knowledge(self, batch: CommitBatch) -> None:
-        fact_ids = {f.fact_id for f in batch.facts}
+        """知識参照の検証(§19)。
+
+        - 直接獲得(participant / witnessed)は fact の audience に含まれる者に限る。
+          観測者候補(observed_by)にいることと、その fact の開示先であることは別。
+        - participant は元結果の参加者、witnessed は元結果の観測者候補であること(via の整合)。
+        - told(伝聞)は第②段階の経路。第①段階の一括確定では受け付けない。
+        """
+        facts_by_id = {f.fact_id: f for f in batch.facts}
+        results_by_id = {r.result_id: r for r in batch.results}
         seen: set[tuple[CasterId, FactId]] = set()
         for k in batch.knowledge:
-            if k.fact_id not in fact_ids:
+            fact = facts_by_id.get(k.fact_id)
+            if fact is None:
                 raise CommitError(f"knowledge の fact が同じバッチにありません: {k.fact_id}")
             if k.owner not in self.casters:
                 raise CommitError(f"未知のキャラの knowledge: {k.owner}")
@@ -205,10 +228,45 @@ class WorldState:
             seen.add(pair)
             if k.acquired_seq != batch.commit_seq:
                 raise CommitError("knowledge の取得順が commit_seq と一致しません")
+            source = results_by_id[fact.source_result_id]
+            match k.via:
+                case KnowledgeVia.PARTICIPANT | KnowledgeVia.WITNESSED:
+                    if k.owner not in fact.audience:
+                        raise CommitError(
+                            f"fact {fact.fact_id} の開示先外への直接認知: {k.owner}({k.via})"
+                        )
+                    if k.learned_from is not None:
+                        raise CommitError("直接獲得の knowledge に learned_from は付けられません")
+                    if k.via is KnowledgeVia.PARTICIPANT:
+                        if k.owner not in source.participant_ids:
+                            raise CommitError(
+                                f"{k.owner} は結果 {source.result_id} の参加者ではありません"
+                            )
+                    elif k.owner not in source.observed_by:
+                        raise CommitError(
+                            f"{k.owner} は結果 {source.result_id} の観測者候補ではありません"
+                        )
+                case KnowledgeVia.TOLD:
+                    raise CommitError("伝聞(told)による知識は第①段階の一括確定では扱いません")
 
     def commit(self, batch: CommitBatch) -> None:
-        """検証してから一括で適用する。部分適用は起きない。"""
+        """検証してから一括で適用する。
+
+        検証(`validate`)は適用段で拒否され得る条件をすべて先回りして `CommitError` にする。
+        万一、適用中に例外が起きた場合は部分更新が残り得るため `integrity_failure` を記録し、
+        `FatalCommitError` にする。以後この世界状態は確定も保存も受け付けない。
+        """
         self.validate(batch)
+        try:
+            self._apply(batch)
+        except Exception as exc:
+            self.integrity_failure = (
+                f"イベント実体 {batch.event_instance_id} の適用中に例外: {exc!r}"
+            )
+            raise FatalCommitError(self.integrity_failure) from exc
+
+    def _apply(self, batch: CommitBatch) -> None:
+        # ここに置く処理は、validate を通過した入力に対して失敗しない単純な代入のみにする
         for d in batch.deltas:
             self.directed.set_stored(d.source, d.target, d.axis, d.stored_after)
             self.delta_history.append(d)

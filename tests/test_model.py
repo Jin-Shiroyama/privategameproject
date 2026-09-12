@@ -237,6 +237,7 @@ def _snapshot(world: WorldState) -> tuple[object, ...]:
         list(world.results),
         list(world.facts),
         list(world.knowledge),
+        list(world.delta_history),
         dict(world.cooldowns),
         set(world.applied_event_ids),
         world.next_result_id,
