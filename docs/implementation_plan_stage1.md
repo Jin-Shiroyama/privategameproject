@@ -185,3 +185,92 @@ tests/
 4. **クールダウン**: 告白者→相手の方向付き。拒否時のみ設定し、期限は拒否時刻から指定日数経過(翌日境界ではない)。逆方向(相手→告白者)の告白は止めない。
 5. **日次処理**: 日境界の履歴化のみ。クールダウンはGameTime比較で判定。同時刻の処理順は日次処理→新スロット。
 6. **パッケージ名** `kankei`。
+
+## 6. M5 イベントパイプライン設計(実装前提示)
+
+### 6.1 §7 の処理順とモジュール・関数の対応
+
+| §7 | 責務 | モジュール | 関数・型 |
+|---|---|---|---|
+| 1 | 開始時点の情報取得 | `engine/context.py` | `EventContext.capture(world, pack, resolver)`: 時刻・キャラ・directed(コピー)・pair(コピー)・cooldowns(コピー)・相性・次のID/確定順を固定した読み取り専用スナップショット |
+| 1 | 候補除外と抽選 | `engine/candidates.py` | `collect_candidates(pack, ctx) -> tuple[Candidate, ...]`(列挙→正規化→重複排除→発生条件評価→ソート)、`draw(candidates, rng) -> Candidate \| None`(重み付き抽選、最大1件) |
+| 1・2 | 条件式の評価 | `engine/evaluate.py` | `evaluate(cond, ctx, event_def, binding) -> bool`。有効値窓口(`ctx.effective`)のみを参照 |
+| 2 | 結果候補の作成 | `engine/outcome.py` | `build_outcome(event_def, binding, ctx) -> OutcomeDraft`: 分岐を定義順に評価して最初に成立した `OutcomeDef` を採用(告白の返答はここで決定的に確定、追加抽選なし)。`DeltaCandidate` 列・結果草案・観測者候補(`observer_policy` 解決)を持つ。永続化しない |
+| 3 | 増減補正・変化禁止 | `engine/modifiers.py` | `Modifier` Protocol(`adjust`)・`BlockPolicy` Protocol(`blocks`)、既定実装 `IdentityModifier` / `NoBlock`。`apply_modifiers(ctx, candidates, modifiers, blocks) -> tuple[ModifiedDelta, ...]`。補正の後に変化禁止を最後に適用する順序だけ固定(第①段階は恒等・禁止なし) |
+| 4 | 値の仮更新 | `engine/apply.py` | `PendingState.from_context(ctx)`(directed/pair の可変コピー)、`PendingState.apply_deltas(modified) -> tuple[PendingDelta, ...]`: 軸範囲内で保存値を更新し、有効値窓口で有効値を再計算。保護下限なし |
+| 4・5 | 遷移評価・状態更新 | `engine/apply.py` | `PendingState.apply_results(draft) -> tuple[PendingResult, ...]`: 仮更新後の pair 状態に対して遷移(`TrackDef.transitions` に存在する from→to のみ、各トラック1イベント最大1回)と面識成立を反映。不整合は `PipelineError`。状態変更後に有効値を再計算(pass-through では値は不変だが窓口を再度通す) |
+| 6 | 一括確定 | `engine/pipeline.py` + `model/world.py` | `assemble_batch(ctx, draft, pending, ...) -> CommitBatch`: ID採番(result_id / fact_id は ctx が固定した次値から連番)、EventResult 生成、fact・知識生成(`engine/facts.py`)、クールダウン更新を1つの `CommitBatch` にまとめ、`WorldState.commit(batch)` で確定 |
+| 6 | fact・知識 | `engine/facts.py` | `generate_facts(result, specs, next_fact_id, commit_seq) -> tuple[tuple[Fact, ...], tuple[Knowledge, ...]]`。入力は `EventResult` と `FactSpec`(定義データ)のみ。開示範囲: public=参加者+observed_by、participants_only=参加者、explicit=指定役割。知識の via は参加者→participant、observed_by→witnessed |
+| 7 | テキスト化 | `text/render.py`(M6) | 確定後の `EventResult` とテンプレ定義から文面を決定的に選択。M5 では呼ばない |
+
+入口: `Pipeline(pack, rng, resolver=None, modifiers=(), blocks=())`。`Pipeline.run_slot(world) -> SlotReport`(候補収集→抽選→`run_event`)、`Pipeline.run_event(world, event_def, binding) -> CommitBatch`(2〜6。テストから直接呼べる)。
+
+### 6.2 各ステップが参照する状態
+
+| 処理 | 参照 | 実装上の入力 | 計画書 §2 の表との対応 |
+|---|---|---|---|
+| 1 候補列挙・発生条件・クールダウン判定・抽選 | 開始時点 | `EventContext` | 1 |
+| 2 結果分岐の判定(告白の受諾/拒否を含む) | 開始時点 | `EventContext` | 2 |
+| 3 増減補正・変化禁止 | 開始時点 | `EventContext` | 3 |
+| 4 保存値の仮更新・有効値の再計算 | 仮更新中 | `PendingState`(ctx から派生) | 4 |
+| 4 遷移の評価(現在状態→遷移先が定義に存在するか) | 仮更新後 | `PendingState` | 4 |
+| 5 状態(面識・トラック)の更新、更新後の有効値再計算 | 変更後 | `PendingState` | 5 |
+| 6 CommitBatch 組立て・確定 | 4-5 の結果 → 確定後 | `PendingState` → `CommitBatch` → `WorldState` | 6 |
+| 7 テキスト化(M6) | 確定後 | `WorldState.results` | 7 |
+
+- `EventContext` は `WorldState` から directed / pair / cooldowns をコピーして作る。スロット内でステップ2〜3が読む値は、ステップ4の仮更新に影響されない。
+- 受諾/拒否は `build_outcome`(ステップ2)で `ctx` の有効値のみから決まる。ステップ4以降で結果分岐を再評価しない(§16)。
+- `PendingState` は永続化しない。`WorldState` に触るのは `commit` のみ。
+
+### 6.3 データフロー
+
+```
+WorldState ──capture──▶ EventContext                                   [1]
+EventContext ──collect_candidates──▶ (Candidate…) ──draw(rng)──▶ Candidate | None
+   Candidate = (event_def_id, participants(正規化タプル), binding{role→CasterId}, weight)
+   None → SlotReport(event=None)。WorldState は変更なし、commit なし
+Candidate + EventContext ──build_outcome──▶ OutcomeDraft                [2]
+   OutcomeDraft = (event_def, outcome, binding, observed_by,
+                   delta_candidates(DeltaCandidate: source,target,axis,value,result_index),
+                   result_specs(定義))
+OutcomeDraft.delta_candidates ──apply_modifiers──▶ (ModifiedDelta…)      [3]
+   ModifiedDelta = (candidate, after_modifier, blocked)
+EventContext ──PendingState.from_context──▶ PendingState                [4]
+PendingState.apply_deltas(ModifiedDelta…) ──▶ (PendingDelta…)
+   PendingDelta = AppliedDelta の result_id 未定版(stored/effective の前後を含む)
+PendingState.apply_results(OutcomeDraft) ──▶ (PendingResult…)           [4-5]
+   PendingResult = (spec, track_change | None, acquaintance_established)
+   pair 変更は PendingState.pairs に反映(変更されたペアのみ PairChange 化)
+assemble_batch ──▶ CommitBatch                                          [6]
+   result_id = ctx.next_result_id から連番、commit_seq = ctx.next_commit_seq
+   EventResult(…, observed_by, related_result_id=同分岐の先頭結果, track_change)
+   AppliedDelta = PendingDelta + result_id
+   generate_facts(EventResult, FactSpec…) → Fact(audience 確定) + Knowledge
+   CooldownUpdate: 採用分岐 ∈ cooldown.after_outcomes のとき
+     key=(event_id, scope 参加者タプル), until = ctx.time + days×ticks_per_day
+   event_instance_id = f"t{tick}-c{commit_seq}-{event_id}"(安定)
+WorldState.commit(CommitBatch)                                           [6]
+   検証失敗 → CommitError、WorldState 不変。成功 → 値・pair・results・facts・knowledge・
+   cooldowns・applied_event_ids・採番を同時に確定
+```
+
+- 候補の正規化: directed は `(actor, target)`(役割順)、pair は参加者IDのソート済みタプル。重複排除キーは `(event_def_id, participants)`。抽選前に同キーでソート。
+- 告白受諾時の結果は `confession`(success=True)と `relationship_established` の2件。返答 fact(`confession_accepted` / `confession_rejected`)は `confession` 結果から生成され、`source_result_id` がその告白結果(= `confession_made` の元)を指す。`relationship_established` 結果は `related_result_id` で告白結果を参照する。
+- クールダウンの経過判定: `CooldownElapsed` は `ctx.cooldowns[(event_id, scope参加者)]` が未設定、または `until <= ctx.time` なら真。逆方向は別キーなので阻まれない。
+
+### 6.4 乱数を消費する箇所
+
+| 箇所 | 消費 |
+|---|---|
+| `engine/candidates.py: draw(candidates, rng)` | 候補が1件以上あるとき `rng.random()` を1回だけ呼び、重みの累積で1件を選ぶ。候補0件なら呼ばない |
+
+上記以外のコード(`context` / `evaluate` / `outcome` / `modifiers` / `apply` / `facts` / `pipeline` / `model` / `affinity` / `text`)は `Random` を引数に取らず、乱数を消費しない。`Pipeline` が保持する `rng` は `draw` にだけ渡す。テストで (a) 候補0件のスロット前後で `rng.getstate()` が不変、(b) 候補ありのスロットで `random()` 1回分だけ進む、(c) 同一seed・同一定義の2回実行でイベント列・確定内容が完全一致、を検証する。
+
+### 6.5 M5 のテスト計画
+
+- 決定性: 同一seed・同一定義で複数スロットを2回実行し、results / facts / knowledge / delta_history / cooldowns / directed / pairs が完全一致。
+- 候補: 重複排除(pair 共有イベントが A-B で1候補)、抽選前ソートの安定性(キャラ登録順やイベント定義順を入れ替えても候補列が同じ)、候補0件で無イベント。
+- 告白: 返答が適用前値で判定される(target→actor が閾値未満なら成功時 delta を足せば届く値でも拒否)。同じ入力なら同じ返答。
+- クールダウン: 拒否→期限内は候補から除外→期限経過で復帰。逆方向の告白は阻まれない。
+- 一括確定: fact・知識・クールダウン・履歴・pair 変更が同一 commit_seq で確定。検証失敗(テストで意図的に破壊)時に何も残らない。
+- 開示範囲: 告白の `confession_made`(public)は同席者(observed_by)も知り、`confession_accepted/rejected`(participants_only)は当事者のみが知る。ときめき・通常交流は fact を生まない。
