@@ -1,0 +1,115 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/Jin_Shiroyama/project/privategameproject
+configfile: pyproject.toml
+collected 31 items
+
+tests/test_commit_integrity.py 実際の例外=CommitError('自分自身への delta は持てません: aoi')
+残った状態差分={}
+.実際の例外=ValueError("ペアキーが正規化されていません: ('haru', 'aoi')")
+残った状態差分={}
+.実際の例外=ValueError('自分自身とのペアは持てません')
+残った状態差分={}
+.実際の例外=CommitError("ペア状態が不正です: ('haru', 'aoi'): ペアキーが正規化されていません: ('haru', 'aoi')")
+残った状態差分={}
+.実際の例外=CommitError("ペア状態が不正です: ('aoi', 'aoi'): 自分自身とのペアは持てません")
+残った状態差分={}
+.生成されたストア=[]
+実際の例外=ValueError("ペアキーが正規化されていません: ('haru', 'aoi')")
+残った状態差分={}
+.生成されたストア=[]
+実際の例外=ValueError('自分自身とのペアは持てません')
+残った状態差分={}
+..実際の例外=CommitError('fact 2 の開示先外への直接認知: mizuki(witnessed)')
+残った状態差分={}
+.....実際の例外=CommitError('mizuki は結果 2 の参加者ではありません')
+残った状態差分={}
+.実際の例外=CommitError('aoi は結果 2 の観測者候補ではありません')
+残った状態差分={}
+.実際の例外=CommitError('伝聞(told)による知識は第①段階の一括確定では扱いません')
+残った状態差分={}
+.保存履歴=((0, 4, 4), (4, 10, 6)); 有効履歴=((0, 10, 4), (4, 10, 6)); 期待=((0, 4, 4), (4, 10, 6)); 実行例外なし
+F保存履歴=((95, 99, 4), (99, 100, 1)); 有効履歴=((95, 100, 4), (99, 100, 1)); 期待=((95, 99, 4), (99, 100, 1)); 実行例外なし
+F保存履歴=((0, 8, 8), (8, 5, -3)); 有効履歴=((0, 5, 8), (8, 5, -3)); 期待=((0, 8, 8), (8, 5, -3)); 実行例外なし
+F実際の例外=None; 世界差分={'results': ([EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)], [EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None), EventResult(result_id=2, event_instance_id='t0-c2-chat', event_def_id='chat', outcome_id='chatted', kind='interaction', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=2, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)]), 'delta_history': ([], [AppliedDelta(result_id=2, source='aoi', target='haru', axis='favor', candidate=4, after_modifier=4, applied=4, stored_before=0, stored_after=4, effective_before=0, effective_after=4, blocked=False, rule_ids=()), AppliedDelta(result_id=2, source='haru', target='aoi', axis='favor', candidate=4, after_modifier=4, applied=4, stored_before=0, stored_after=4, effective_before=0, effective_after=4, blocked=False, rule_ids=()), AppliedDelta(result_id=2, source='aoi', target='haru', axis='friendship', candidate=2, after_modifier=2, applied=2, stored_before=0, stored_after=2, effective_before=0, effective_after=2, blocked=False, rule_ids=()), AppliedDelta(result_id=2, source='haru', target='aoi', axis='friendship', candidate=2, after_modifier=2, applied=2, stored_before=0, stored_after=2, effective_before=0, effective_after=2, blocked=False, rule_ids=())]), 'applied_event_ids': ({'t0-c1-meet'}, {'t0-c2-chat', 't0-c1-meet'}), 'next_result_id': (2, 3), 'next_commit_seq': (2, 3), 'directed': ({}, {('aoi', 'haru', 'favor'): 4, ('aoi', 'haru', 'friendship'): 2, ('haru', 'aoi', 'favor'): 4, ('haru', 'aoi', 'friendship'): 2})}
+候補収集回数=1; RNG不変=False
+F実際の例外=None; 世界差分={'results': ([EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)], [EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None), EventResult(result_id=2, event_instance_id='t0-c2-chat', event_def_id='chat', outcome_id='chatted', kind='interaction', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=2, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)]), 'delta_history': ([], [AppliedDelta(result_id=2, source='aoi', target='haru', axis='favor', candidate=4, after_modifier=4, applied=4, stored_before=0, stored_after=4, effective_before=0, effective_after=4, blocked=False, rule_ids=()), AppliedDelta(result_id=2, source='haru', target='aoi', axis='favor', candidate=4, after_modifier=4, applied=4, stored_before=0, stored_after=4, effective_before=0, effective_after=4, blocked=False, rule_ids=()), AppliedDelta(result_id=2, source='aoi', target='haru', axis='friendship', candidate=2, after_modifier=2, applied=2, stored_before=0, stored_after=2, effective_before=0, effective_after=2, blocked=False, rule_ids=()), AppliedDelta(result_id=2, source='haru', target='aoi', axis='friendship', candidate=2, after_modifier=2, applied=2, stored_before=0, stored_after=2, effective_before=0, effective_after=2, blocked=False, rule_ids=())]), 'applied_event_ids': ({'t0-c1-meet'}, {'t0-c2-chat', 't0-c1-meet'}), 'next_result_id': (2, 3), 'next_commit_seq': (2, 3), 'directed': ({}, {('aoi', 'haru', 'favor'): 4, ('aoi', 'haru', 'friendship'): 2, ('haru', 'aoi', 'favor'): 4, ('haru', 'aoi', 'friendship'): 2})}
+候補収集回数=0; RNG不変=True
+F実際の例外=None; 世界差分={'results': ([EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)], [EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None), EventResult(result_id=2, event_instance_id='t0-c2-chat', event_def_id='chat', outcome_id='chatted', kind='interaction', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=2, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)]), 'delta_history': ([], [AppliedDelta(result_id=2, source='aoi', target='haru', axis='favor', candidate=17, after_modifier=17, applied=17, stored_before=0, stored_after=17, effective_before=0, effective_after=17, blocked=False, rule_ids=())]), 'applied_event_ids': ({'t0-c1-meet'}, {'t0-c2-chat', 't0-c1-meet'}), 'next_result_id': (2, 3), 'next_commit_seq': (2, 3), 'directed': ({}, {('aoi', 'haru', 'favor'): 17})}
+候補収集回数=1; RNG不変=False
+F実際の例外=None; 世界差分={'results': ([EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)], [EventResult(result_id=1, event_instance_id='t0-c1-meet', event_def_id='meet', outcome_id='met', kind='met', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=1, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None), EventResult(result_id=2, event_instance_id='t0-c2-chat', event_def_id='chat', outcome_id='chatted', kind='interaction', success=True, participants=(Participant(caster='aoi', role='a'), Participant(caster='haru', role='b')), game_time=GameTime(tick=0), commit_seq=2, observed_by=('mizuki',), definition_version='v1', related_result_id=None, track_change=None)]), 'delta_history': ([], [AppliedDelta(result_id=2, source='aoi', target='haru', axis='favor', candidate=17, after_modifier=17, applied=17, stored_before=0, stored_after=17, effective_before=0, effective_after=17, blocked=False, rule_ids=())]), 'applied_event_ids': ({'t0-c1-meet'}, {'t0-c2-chat', 't0-c1-meet'}), 'next_result_id': (2, 3), 'next_commit_seq': (2, 3), 'directed': ({}, {('aoi', 'haru', 'favor'): 17})}
+候補収集回数=0; RNG不変=True
+F..構造診断: 読取=[50]; 確定favor=50; 世界romance=0; 例外=None
+F2000スロット×独立2回: 経過日数=250.0; 最終時刻=GameTime(tick=6000); 無イベント=0; 全比較一致
+.2000スロット×独立2回: 経過日数=250.0; 最終時刻=GameTime(tick=6000); 無イベント=1997; 全比較一致
+..クールダウン期限=GameTime(tick=72); 直前は無更新、期限一致時に再告白確定
+..
+
+=================================== FAILURES ===================================
+_________ test_m5_each_delta_retains_its_effective_history[successive] _________
+tests/test_commit_integrity.py:363: in test_m5_each_delta_retains_its_effective_history
+    assert (stored, effective) == (expected, expected)
+E   assert (((0, 4, 4), ..., (4, 10, 6))) == (((0, 4, 4), ..., (4, 10, 6)))
+E     
+E     At index 1 diff: ((0, 10, 4), (4, 10, 6)) != ((0, 4, 4), (4, 10, 6))
+E     Use -v to get more diff
+________ test_m5_each_delta_retains_its_effective_history[upper-bound] _________
+tests/test_commit_integrity.py:363: in test_m5_each_delta_retains_its_effective_history
+    assert (stored, effective) == (expected, expected)
+E   assert (((95, 99, 4)...(99, 100, 1))) == (((95, 99, 4)...(99, 100, 1)))
+E     
+E     At index 1 diff: ((95, 100, 4), (99, 100, 1)) != ((95, 99, 4), (99, 100, 1))
+E     Use -v to get more diff
+________ test_m5_each_delta_retains_its_effective_history[mixed-signs] _________
+tests/test_commit_integrity.py:363: in test_m5_each_delta_retains_its_effective_history
+    assert (stored, effective) == (expected, expected)
+E   assert (((0, 8, 8), ..., (8, 5, -3))) == (((0, 8, 8), ..., (8, 5, -3)))
+E     
+E     At index 1 diff: ((0, 5, 8), (8, 5, -3)) != ((0, 8, 8), (8, 5, -3))
+E     Use -v to get more diff
+__ test_m5_version_mismatch_rejected_before_selection[version-only-run_slot] ___
+tests/test_commit_integrity.py:404: in test_m5_version_mismatch_rejected_before_selection
+    assert (
+E   assert (False, False, False, [True]) == (True, True, True, [])
+E     
+E     At index 0 diff: False != True
+E     Use -v to get more diff
+__ test_m5_version_mismatch_rejected_before_selection[version-only-run_event] __
+tests/test_commit_integrity.py:404: in test_m5_version_mismatch_rejected_before_selection
+    assert (
+E   assert (False, False, True, []) == (True, True, True, [])
+E     
+E     At index 0 diff: False != True
+E     Use -v to get more diff
+_ test_m5_version_mismatch_rejected_before_selection[version-and-delta-run_slot] _
+tests/test_commit_integrity.py:404: in test_m5_version_mismatch_rejected_before_selection
+    assert (
+E   assert (False, False, False, [True]) == (True, True, True, [])
+E     
+E     At index 0 diff: False != True
+E     Use -v to get more diff
+_ test_m5_version_mismatch_rejected_before_selection[version-and-delta-run_event] _
+tests/test_commit_integrity.py:404: in test_m5_version_mismatch_rejected_before_selection
+    assert (
+E   assert (False, False, True, []) == (True, True, True, [])
+E     
+E     At index 0 diff: False != True
+E     Use -v to get more diff
+________________ test_m5_context_readonly_structure_diagnostic _________________
+tests/test_commit_integrity.py:457: in test_m5_context_readonly_structure_diagnostic
+    assert (reads, actual_favor) == ([0], 0), "開始時点スナップショットが補正中に変化した"
+E   AssertionError: 開始時点スナップショットが補正中に変化した
+E   assert ([50], 50) == ([0], 0)
+E     
+E     At index 0 diff: [50] != [0]
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/test_commit_integrity.py::test_m5_each_delta_retains_its_effective_history[successive]
+FAILED tests/test_commit_integrity.py::test_m5_each_delta_retains_its_effective_history[upper-bound]
+FAILED tests/test_commit_integrity.py::test_m5_each_delta_retains_its_effective_history[mixed-signs]
+FAILED tests/test_commit_integrity.py::test_m5_version_mismatch_rejected_before_selection[version-only-run_slot]
+FAILED tests/test_commit_integrity.py::test_m5_version_mismatch_rejected_before_selection[version-only-run_event]
+FAILED tests/test_commit_integrity.py::test_m5_version_mismatch_rejected_before_selection[version-and-delta-run_slot]
+FAILED tests/test_commit_integrity.py::test_m5_version_mismatch_rejected_before_selection[version-and-delta-run_event]
+FAILED tests/test_commit_integrity.py::test_m5_context_readonly_structure_diagnostic
+========================= 8 failed, 23 passed in 0.83s =========================
