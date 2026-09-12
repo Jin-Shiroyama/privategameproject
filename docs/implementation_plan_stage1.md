@@ -274,3 +274,29 @@ WorldState.commit(CommitBatch)                                           [6]
 - クールダウン: 拒否→期限内は候補から除外→期限経過で復帰。逆方向の告白は阻まれない。
 - 一括確定: fact・知識・クールダウン・履歴・pair 変更が同一 commit_seq で確定。検証失敗(テストで意図的に破壊)時に何も残らない。
 - 開示範囲: 告白の `confession_made`(public)は同席者(observed_by)も知り、`confession_accepted/rejected`(participants_only)は当事者のみが知る。ときめき・通常交流は fact を生まない。
+
+### 6.6 定義の不備は速く大きく失敗する(承認時の追加条件)
+
+- **遷移不整合**: 要求された遷移(例 `none→lovers`)が現在状態から `TrackDef.transitions` に存在しない場合は `PipelineError` で停止する。黙って省略しない。
+  - (a) この例外は `PendingState` 段階(commit 開始前)で発生させ、`WorldState` は無傷のまま停止する。適用中の `FatalCommitError`(部分更新あり)とは別種として区別する。
+  - (b) メッセージにイベント定義ID・結果分岐ID・ペア・トラック・現在状態・要求遷移先を含める。
+- **全分岐不成立**: ローダが「最後の結果分岐は条件なしの既定分岐」を必須にしているため、正常な定義では起こらない。実行時にもどの分岐も成立しなければ `PipelineError`(イベント定義ID・binding を含む)で停止し、「黙って何も起きない」を許さない。
+- 上記はどちらも定義または実装の不備であり、乱数・保護の結果ではない。
+
+### 6.7 結果種別と fact 種別の対応(§14 の初体験検出が参照する境界)
+
+返答は独立した EventResult にしない。告白の EventResult(kind=`confession`)から発言 fact と返答 fact の両方を直接生成し、返答の内容は fact kind で区別する。
+
+| イベント | 分岐 | EventResult(kind, success) | related_result_id | fact(kind, audience, 付随情報) |
+|---|---|---|---|---|
+| meet | met | `met`, True | なし | `met`, public |
+| chat | chatted | `interaction`, True | なし | (なし: 内部 delta のみ) |
+| crush | crushed | `infatuation`, True | なし | (なし: 内面の恋慕は開示しない) |
+| confession | accepted | ① `confession`, True | なし | `confession_made`, public / `confession_accepted`, participants_only |
+| confession | accepted | ② `relationship_established`, True | ①の result_id | `relationship_established`, public, track=romance, state_after=lovers |
+| confession | rejected | `confession`, False | なし | `confession_made`, public / `confession_rejected`, participants_only |
+| daily(M6) | day_closed | `day_closed`, True | なし | (なし) |
+
+- 同一分岐内の2件目以降の EventResult は `related_result_id` で先頭の結果を参照する。
+- fact の `source_result_id` は生成元の EventResult。返答 fact は告白結果を指すため、知識から「誰の告白への返答か」を辿れる。
+- 初告白した/された(§14)は `confession` 結果の actor / target 役割から、初めての恋人は `relationship_established` 結果から、後段で検出できる。
