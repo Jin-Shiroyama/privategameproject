@@ -2,11 +2,16 @@
 
 from kankei.model.caster import Caster
 from kankei.model.clock import Calendar, GameTime
-from kankei.model.directed import DirectedStore, EffectiveValueResolver, PassThroughResolver
+from kankei.model.directed import (
+    DirectedStore,
+    DirectedView,
+    EffectiveValueResolver,
+    PassThroughResolver,
+)
 from kankei.model.fact import Fact, Knowledge, KnowledgeVia
 from kankei.model.history import AppliedDelta
 from kankei.model.ids import CasterId, EventInstanceId, FactId, ResultId
-from kankei.model.pair import PairKey, PairState, PairStore, pair_key
+from kankei.model.pair import PairKey, PairState, PairStore, PairView, pair_key
 from kankei.model.result import EventResult, Participant, TrackChange
 from kankei.model.world import (
     CommitBatch,
@@ -28,6 +33,7 @@ __all__ = [
     "CooldownKey",
     "CooldownUpdate",
     "DirectedStore",
+    "DirectedView",
     "EffectiveValueResolver",
     "EventInstanceId",
     "EventResult",
@@ -41,6 +47,7 @@ __all__ = [
     "PairKey",
     "PairState",
     "PairStore",
+    "PairView",
     "Participant",
     "PassThroughResolver",
     "ResultId",

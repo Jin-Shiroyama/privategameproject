@@ -101,3 +101,24 @@ class PairStore:
     def copy(self) -> PairStore:
         """複製。"""
         return PairStore(self._tracks, self._states)
+
+
+class PairView:
+    """PairStore の読み取り専用ビュー。書込みメソッドを持たない。"""
+
+    __slots__ = ("_store",)
+
+    def __init__(self, store: PairStore) -> None:
+        self._store = store
+
+    def get(self, a: CasterId, b: CasterId) -> PairState:
+        """ペア状態のコピー。"""
+        return self._store.get(a, b)
+
+    def items(self) -> Iterator[tuple[PairKey, PairState]]:
+        """登録済みペアの安定順列挙(コピー)。"""
+        return self._store.items()
+
+    def copy_store(self) -> PairStore:
+        """可変の複製(仮更新用)。"""
+        return self._store.copy()

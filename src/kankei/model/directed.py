@@ -87,3 +87,37 @@ class DirectedStore:
     def copy(self) -> DirectedStore:
         """同じ軸定義・resolver を共有する複製。"""
         return DirectedStore(self._axes, self._resolver, dict(self._values))
+
+
+class DirectedView:
+    """DirectedStore の読み取り専用ビュー(§7-1 の開始時点スナップショット用)。
+
+    書込みメソッドを持たない。可変の複製が必要な場合は `copy_store()` で新しい DirectedStore を得る
+    (複製への書込みはビューの元のストアに影響しない)。
+    """
+
+    __slots__ = ("_store",)
+
+    def __init__(self, store: DirectedStore) -> None:
+        self._store = store
+
+    @property
+    def axes(self) -> Mapping[str, AxisDef]:
+        """軸定義。"""
+        return self._store.axes
+
+    def stored(self, source: CasterId, target: CasterId, axis_id: str) -> int:
+        """保存値。"""
+        return self._store.stored(source, target, axis_id)
+
+    def effective(self, source: CasterId, target: CasterId, axis_id: str) -> int:
+        """有効値。"""
+        return self._store.effective(source, target, axis_id)
+
+    def items(self) -> Iterator[tuple[DirectedKey, int]]:
+        """保存値の安定順列挙。"""
+        return self._store.items()
+
+    def copy_store(self) -> DirectedStore:
+        """可変の複製(仮更新用)。"""
+        return self._store.copy()

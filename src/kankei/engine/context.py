@@ -1,8 +1,12 @@
 """§7-1: 開始時点の情報(EventContext)。
 
 スロット開始時の WorldState から directed / pair / cooldowns をコピーした
-読み取り専用スナップショット。
+読み取り専用スナップショット。directed / pairs は書込みメソッドを持たないビュー型で公開し、
+補正実装などがスナップショットを書き換えられない(静的・実行時の両方で拒否)。
 ステップ1〜3(候補列挙・発生条件・返答判定・補正)はこれだけを参照し、ステップ4以降の仮更新に影響されない。
+
+定義版の照合もここで行う。`pack.version` と `world.definition_version` が異なれば
+候補収集・乱数消費・世界更新より前に `PipelineError` で拒否する(入口が増えても一点で守る)。
 """
 
 from __future__ import annotations
@@ -13,11 +17,12 @@ from types import MappingProxyType
 
 from kankei.affinity import compat
 from kankei.definitions.schema import ContentPack
+from kankei.engine.errors import PipelineError
 from kankei.model.caster import Caster
 from kankei.model.clock import Calendar, GameTime
-from kankei.model.directed import DirectedStore
+from kankei.model.directed import DirectedView
 from kankei.model.ids import CasterId
-from kankei.model.pair import PairState, PairStore
+from kankei.model.pair import PairState, PairView
 from kankei.model.world import CooldownKey, WorldState
 
 
@@ -28,8 +33,8 @@ class EventContext:
     pack: ContentPack
     time: GameTime
     casters: Mapping[CasterId, Caster]
-    directed: DirectedStore
-    pairs: PairStore
+    directed: DirectedView
+    pairs: PairView
     cooldowns: Mapping[CooldownKey, GameTime]
     next_result_id: int
     next_fact_id: int
@@ -38,13 +43,18 @@ class EventContext:
 
     @classmethod
     def capture(cls, world: WorldState, pack: ContentPack) -> EventContext:
-        """WorldState から現在の情報を固定する。"""
+        """WorldState から現在の情報を固定する。定義版が一致しなければ拒否する。"""
+        if pack.version != world.definition_version:
+            raise PipelineError(
+                f"定義版が一致しません: 世界状態は '{world.definition_version}'、"
+                f"渡された定義データは '{pack.version}'"
+            )
         return cls(
             pack=pack,
             time=world.time,
             casters=MappingProxyType(dict(world.casters)),
-            directed=world.directed.copy(),
-            pairs=world.pairs.copy(),
+            directed=DirectedView(world.directed.copy()),
+            pairs=PairView(world.pairs.copy()),
             cooldowns=MappingProxyType(dict(world.cooldowns)),
             next_result_id=world.next_result_id,
             next_fact_id=world.next_fact_id,
