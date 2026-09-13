@@ -1,5 +1,6 @@
 # テンプレートログ(§2)。文面は乱数を消費せず result_id % バリエーション数 で選ぶ。
-# プレースホルダはイベントの役割名({a} {b} {actor} {target})と {day} のみ
+# プレースホルダはイベントの役割名({a} {b} {actor} {target})と {day}(結果時刻の属する日、1始まり)、
+# {closed_day}(日境界で締めた日、1始まり)のみ
 templates:
   - result_kind: met
     variants:
@@ -39,4 +40,4 @@ templates:
 
   - result_kind: day_closed
     variants:
-      - "―― {day}日目が終わった ――"
+      - "―― {closed_day}日目が終わった ――"

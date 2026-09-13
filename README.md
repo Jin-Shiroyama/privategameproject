@@ -23,3 +23,12 @@ uv pip install -e ".[dev]"
 ## 定義データ
 
 `content/` にゲーム固有の定義(軸・トラック・性格タグ・相性ルール・イベント・テンプレート・進行設定・検証用キャラ)を YAML で置く。読み込みは `kankei.definitions.load_content_pack(Path("content"))`。不正な定義は補正せず `DefinitionError` で止まる。
+
+## 実行
+
+```sh
+.venv/bin/kankei run [--content content] [--seed 0] [--speed 実秒/ゲーム日] [--days N]
+```
+
+チャット風ログが標準出力へ流れ続ける。Ctrl+C で停止。`--days N` は N 日目の締めまで進めて自動終了する(検証用)。
+アプリを閉じている間・PC スリープ中は世界が止まり、復帰時に進むのは最大で `max_real_elapsed_seconds` 分だけ(正本§8)。

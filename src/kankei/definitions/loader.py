@@ -75,7 +75,7 @@ PACK_FILES: tuple[str, ...] = (
 )
 
 # 役割名以外に許すテンプレートのプレースホルダ
-_COMMON_PLACEHOLDERS: frozenset[str] = frozenset({"day"})
+_COMMON_PLACEHOLDERS: frozenset[str] = frozenset({"day", "closed_day"})
 
 # ---------------------------------------------------------------------------
 # 低レベルの読み取りヘルパ
@@ -789,6 +789,7 @@ def _parse_settings(m: dict[str, Any]) -> Settings:
             "event_slots_per_day",
             "real_seconds_per_game_day",
             "max_real_elapsed_seconds",
+            "loop_interval_seconds",
         ),
         path,
     )
@@ -806,13 +807,19 @@ def _parse_settings(m: dict[str, Any]) -> Settings:
     max_elapsed = _float(
         _req(m, "max_real_elapsed_seconds", path), f"{path}.max_real_elapsed_seconds"
     )
-    if real_seconds <= 0 or max_elapsed <= 0:
+    loop_interval = _float(_req(m, "loop_interval_seconds", path), f"{path}.loop_interval_seconds")
+    if real_seconds <= 0 or max_elapsed <= 0 or loop_interval <= 0:
         raise DefinitionError(path, "実時間の設定は正の数にしてください")
+    if loop_interval >= max_elapsed:
+        raise DefinitionError(
+            path, "loop_interval_seconds は max_real_elapsed_seconds より小さくしてください"
+        )
     return Settings(
         ticks_per_day=ticks_per_day,
         event_slots_per_day=slots,
         real_seconds_per_game_day=real_seconds,
         max_real_elapsed_seconds=max_elapsed,
+        loop_interval_seconds=loop_interval,
     )
 
 
