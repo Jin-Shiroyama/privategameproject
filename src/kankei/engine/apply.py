@@ -1,6 +1,8 @@
 """§7-4・5: 仮更新と状態更新(PendingState)。永続化しない。
 
 - 保存値を軸範囲内で更新し、有効値窓口で有効値を求める(保護下限は第③段階)。
+- delta ごとの履歴(前後の保存値・有効値)はその delta 適用直後の値を保持する。§7-5 の
+  「状態変更後の有効値再計算」は現在値の再計算であり、過去の delta 履歴を書き換えない。
 - 遷移は仮更新後の pair 状態に対して評価する。現在状態から定義されていない遷移は
   定義の不備として `PipelineError` で停止する(commit 前・世界状態は無傷)。
 - 各トラックの遷移確定は1イベント最大1回。
@@ -50,8 +52,8 @@ class PendingState:
 
     def __init__(self, ctx: EventContext) -> None:
         self.ctx = ctx
-        self.directed = ctx.directed.copy()
-        self.pairs = ctx.pairs.copy()
+        self.directed = ctx.directed.copy_store()
+        self.pairs = ctx.pairs.copy_store()
         self.changed_pairs: dict[PairKey, PairState] = {}
 
     # --- 4: 値の仮更新 -----------------------------------------------------
@@ -138,23 +140,17 @@ class PendingState:
             out.append(PendingResult(i, spec, change, acquainted))
         return tuple(out)
 
-    def refresh_effective(self, deltas: tuple[PendingDelta, ...]) -> tuple[PendingDelta, ...]:
-        """状態変更後の制約で有効値を再計算する(§7-5)。第①段階では値は変わらないが窓口を通す。"""
-        out: list[PendingDelta] = []
+    def current_effective(
+        self, deltas: tuple[PendingDelta, ...]
+    ) -> dict[tuple[CasterId, CasterId, str], int]:
+        """§7-5: 状態変更後の制約で「現在の有効値」を再計算する。
+
+        返すのは今回 delta が作用したキーごとの最終有効値であり、各 delta の履歴
+        (`PendingDelta.effective_before/after` = その delta 適用直後の値)は書き換えない。
+        第①段階(cap なし)では各キーの最後の delta の effective_after と一致する。
+        """
+        out: dict[tuple[CasterId, CasterId, str], int] = {}
         for d in deltas:
             c = d.candidate
-            effective_after = self.directed.effective(c.source, c.target, c.axis)
-            out.append(
-                PendingDelta(
-                    candidate=c,
-                    after_modifier=d.after_modifier,
-                    applied=d.applied,
-                    stored_before=d.stored_before,
-                    stored_after=d.stored_after,
-                    effective_before=d.effective_before,
-                    effective_after=effective_after,
-                    blocked=d.blocked,
-                    rule_ids=d.rule_ids,
-                )
-            )
-        return tuple(out)
+            out[(c.source, c.target, c.axis)] = self.directed.effective(c.source, c.target, c.axis)
+        return out

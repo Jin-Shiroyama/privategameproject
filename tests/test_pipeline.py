@@ -391,3 +391,24 @@ def test_run_event_rejects_wrong_binding(pack: ContentPack) -> None:
 def test_outcome_type_is_definition(pack: ContentPack) -> None:
     assert isinstance(pack.events["confession"].outcomes[0], OutcomeDef)
     assert ResultId(1) == 1
+
+
+# --- 履歴の連鎖不変条件(M5レビューA) ---------------------------------------------
+
+
+def test_delta_history_chains_per_key_across_long_run(pack: ContentPack) -> None:
+    """同じ (source, target, axis) の delta は、各 before が直前の after と一致し、
+    有効値の履歴も保存値の履歴と整合する(cap なしの第①段階)。"""
+    world, _ = _run_slots(pack, seed=5, slots=400)
+    last: dict[tuple[CasterId, CasterId, str], int] = {}
+    assert len(world.delta_history) > 100
+    for d in world.delta_history:
+        key = (d.source, d.target, d.axis)
+        expected_before = last.get(key, pack.axes[d.axis].initial)
+        assert d.stored_before == expected_before, (key, d)
+        assert d.effective_before == d.stored_before
+        assert d.effective_after == d.stored_after
+        assert d.stored_after - d.stored_before == d.applied
+        last[key] = d.stored_after
+    for key, value in last.items():
+        assert world.directed.stored(*key) == value

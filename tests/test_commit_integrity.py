@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import fields, replace
 from pathlib import Path
 from random import Random
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -423,38 +423,62 @@ def test_m5_matching_version_commits(pack: ContentPack, entry: str) -> None:
     assert world.next_commit_seq == 2
 
 
-def test_m5_context_readonly_structure_diagnostic(pack: ContentPack) -> None:
-    """恒等補正とは別の構造診断。観測値50を正常な期待値として固定しない。"""
+def test_m5_context_is_readonly_for_modifiers(pack: ContentPack) -> None:
+    """C: EventContext の directed / pairs は書込みメソッドを持たないビュー型。
+
+    レビュー時の構造診断(ctx.directed.set_stored で開始時点値が変わる)を、採用した設計
+    「読み取り専用ビューを公開型にする」に合わせて固定した。書込みは mypy strict で型エラーになり、
+    実行時にも AttributeError で拒否される。世界状態は無傷で、確定は起きない。
+    """
     reads: list[int] = []
 
     class Writer:
         rule_id = "review-context-writer"
 
         def adjust(self, ctx: EventContext, delta: DeltaCandidate, value: int) -> int:
-            ctx.directed.set_stored(A, B, "romance", 50)
+            # 型検査を迂回して書込みを試みる(通常コードでは mypy が拒否する)
+            cast(Any, ctx.directed).set_stored(A, B, "romance", 50)
             return value
 
     class Reader:
         rule_id = "review-context-reader"
 
         def adjust(self, ctx: EventContext, delta: DeltaCandidate, value: int) -> int:
-            if (delta.source, delta.target, delta.axis) == (A, B, "favor"):
-                observed = ctx.effective(A, B, "romance")
-                reads.append(observed)
-                return observed
+            reads.append(ctx.effective(A, B, "romance"))
             return value
 
     world = WorldState.new(pack)
+    Pipeline(pack, Random(0)).run_event(world, "meet", {"a": A, "b": B})
+    before = _snapshot(world)
     pipeline = Pipeline(pack, Random(7), modifiers=(Writer(), Reader()))
     error = _capture(lambda: pipeline.run_event(world, "chat", {"a": A, "b": B}))
-    actual_favor = world.directed.stored(A, B, "favor")
-    print(
-        f"構造診断: 読取={reads}; 確定favor={actual_favor}; "
-        f"世界romance={world.directed.stored(A, B, 'romance')}; 例外={error!r}"
-    )
-    assert error is None
+    print(f"構造診断: 例外={error!r}; 読取={reads}")
+    assert isinstance(error, AttributeError)
+    assert reads == []
+    assert _snapshot(world) == before
+    assert not hasattr(EventContext.capture(world, pack).directed, "set_stored")
+    assert not hasattr(EventContext.capture(world, pack).pairs, "put")
+
+
+def test_m5_copy_of_context_store_does_not_leak_into_context(pack: ContentPack) -> None:
+    """copy_store() で得た可変複製への書込みは、スナップショット本体に影響しない。"""
+    reads: list[int] = []
+
+    class CopyWriter:
+        rule_id = "review-copy-writer"
+
+        def adjust(self, ctx: EventContext, delta: DeltaCandidate, value: int) -> int:
+            ctx.directed.copy_store().set_stored(A, B, "romance", 50)
+            reads.append(ctx.effective(A, B, "romance"))
+            return value
+
+    world = WorldState.new(pack)
+    Pipeline(pack, Random(0)).run_event(world, "meet", {"a": A, "b": B})
+    pipeline = Pipeline(pack, Random(7), modifiers=(CopyWriter(),))
+    pipeline.run_event(world, "chat", {"a": A, "b": B})
+    assert reads and set(reads) == {0}
     assert world.directed.stored(A, B, "romance") == 0
-    assert (reads, actual_favor) == ([0], 0), "開始時点スナップショットが補正中に変化した"
+    assert world.directed.stored(A, B, "favor") == 4
 
 
 @pytest.mark.parametrize("only_meet", [False, True], ids=["full-content", "including-empty-slots"])

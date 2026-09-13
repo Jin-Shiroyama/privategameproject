@@ -168,7 +168,7 @@ class Pipeline:
         pending = PendingState(ctx)
         deltas = pending.apply_deltas(modified)  # 4
         results = pending.apply_results(draft)  # 4-5
-        deltas = pending.refresh_effective(deltas)  # 5
+        pending.current_effective(deltas)  # 5: 状態変更後の現在有効値(履歴は書き換えない)
         batch = assemble_batch(ctx, draft, pending, deltas, results)  # 6
         world.commit(batch)
         return batch

@@ -283,6 +283,12 @@ WorldState.commit(CommitBatch)                                           [6]
 - **全分岐不成立**: ローダが「最後の結果分岐は条件なしの既定分岐」を必須にしているため、正常な定義では起こらない。実行時にもどの分岐も成立しなければ `PipelineError`(イベント定義ID・binding を含む)で停止し、「黙って何も起きない」を許さない。
 - 上記はどちらも定義または実装の不備であり、乱数・保護の結果ではない。
 
+### 6.6b M5 差し戻し対応で確定した原則
+
+- **delta 履歴と現在有効値の分離**: `AppliedDelta` の `effective_before/after` は、その delta 適用直後の値を保持する。§7-5 の「状態変更後の有効値再計算」は現在の有効値(以後の遷移評価・条件が使う値)の再計算であり、過去の delta 履歴を書き換えない。第④段階で cap を導入しても、状態変更による有効値の変動は履歴の書き換えではなく、必要なら別の記録として残す。同一キーの連続 delta は各 before が直前の after と一致する(連鎖不変条件、テストで固定)。
+- **定義版の照合は `EventContext.capture` の一点**: `pack.version != world.definition_version` なら候補収集・乱数消費・世界更新より前に `PipelineError`。入口(`run_slot` / `run_event`)が増えても自動的に守られる。M7 の異版セーブ読込み拒否とは別の、実行入口側の保証。
+- **EventContext は型として読み取り専用**: `directed` / `pairs` は書込みメソッドを持たない `DirectedView` / `PairView` で公開する。補正実装からの書込みは mypy strict で型エラー、実行時も AttributeError。可変ストアは `PendingState` 生成時に `copy_store()` で得る。
+
 ### 6.7 結果種別と fact 種別の対応(§14 の初体験検出が参照する境界)
 
 返答は独立した EventResult にしない。告白の EventResult(kind=`confession`)から発言 fact と返答 fact の両方を直接生成し、返答の内容は fact kind で区別する。
