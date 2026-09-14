@@ -248,6 +248,7 @@ class Settings:
     event_slots_per_day: int
     real_seconds_per_game_day: float
     max_real_elapsed_seconds: float
+    loop_interval_seconds: float
 
     @property
     def ticks_per_slot(self) -> int:

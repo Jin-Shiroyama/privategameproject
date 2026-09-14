@@ -660,3 +660,239 @@ def test_constructor_rejects_distinct_normalized_keys_without_mutating_input(
     assert states[dictionary_key] is state
     assert state.track_states is tracks
     print(f"キー不一致の拒否={rejected.value!r}; 入力辞書・PairStateの変更なし")
+
+
+# --- M6レビュー: CLI経路の中断・日次ID・速度入力 --------------------------------
+
+
+@pytest.mark.parametrize("position", ["delta", "daily", "sleep"])
+def test_m6_ctrl_c_does_not_report_incomplete_tick_as_success(
+    pack: ContentPack,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    position: str,
+) -> None:
+    """処理途中の中断は、完了して停止するか未完了を明示して非0で止まる。"""
+    from kankei import cli
+    from kankei.runtime import App, FakeClock
+
+    clock = FakeClock()
+    rng = Random(7)
+    worlds: list[WorldState] = []
+    before: list[dict[str, object]] = []
+    reached: list[dict[str, object]] = []
+    rng_before = rng.getstate()
+    selected = replace(pack, events={"chat": pack.events["chat"]}) if position == "delta" else pack
+    monkeypatch.setattr(cli, "load_content_pack", lambda path: selected)
+    monkeypatch.setattr(cli, "Random", lambda seed: rng)
+    monkeypatch.setattr(cli, "MonotonicClock", lambda: clock)
+    original_run = App.run
+
+    class ReviewSleeper:
+        def sleep(self, seconds: float) -> None:
+            if position == "sleep":
+                assert _snapshot(worlds[0]) == before[0]
+                reached.append(_snapshot(worlds[0]))
+                raise KeyboardInterrupt("処理外のsleep")
+            clock.advance(1.0)
+            assert clock.now() < 10, "注入位置へ到達しなかった"
+
+    monkeypatch.setattr(cli, "TimeSleeper", ReviewSleeper)
+
+    def observed_run(app: App) -> int:
+        world = app.world
+        worlds.append(world)
+        if position == "delta":
+            Pipeline(pack, Random(0)).run_event(world, "meet", {"a": A, "b": B})
+            world.time = GameTime(pack.settings.ticks_per_slot - 1)
+
+            class InterruptHistory(list[AppliedDelta]):
+                def __deepcopy__(self, memo: dict[int, Any]) -> list[AppliedDelta]:
+                    """観測用コピーでは例外注入付きappendを再実行しない。"""
+                    return list(self)
+
+                def append(self, delta: AppliedDelta) -> None:
+                    super().append(delta)
+                    if not reached:
+                        assert world.directed.stored(A, B, "favor") == 4
+                        assert len(self) == 1 and self[0] == delta
+                        assert len(world.results) == 1
+                        assert world.next_commit_seq == 2
+                        reached.append(_snapshot(world))
+                        raise KeyboardInterrupt("最初のdeltaと履歴の適用直後")
+
+            world.delta_history = InterruptHistory(world.delta_history)
+        elif position == "daily":
+            world.time = GameTime(pack.settings.ticks_per_day - 1)
+            original_slot = app.pipeline.run_slot
+
+            def interrupt_before_slot(current: WorldState) -> SlotReport:
+                if not reached:
+                    assert current.time == GameTime(pack.settings.ticks_per_day)
+                    assert len(current.results) == 1
+                    assert current.results[0].kind == "day_closed"
+                    assert current.next_commit_seq == 2
+                    assert rng.getstate() == rng_before
+                    reached.append(_snapshot(current))
+                    raise KeyboardInterrupt("日次確定後、同tickスロット開始前")
+                return original_slot(current)
+
+            monkeypatch.setattr(app.pipeline, "run_slot", interrupt_before_slot)
+        before.append(_snapshot(world))
+        return original_run(app)
+
+    monkeypatch.setattr(App, "run", observed_run)
+    code = cli.main(["run", "--seed", "7", "--speed", "24"])
+    captured = capsys.readouterr()
+    assert len(reached) == 1
+    world = worlds[0]
+    after = _snapshot(world)
+    print(
+        f"中断位置={position}; 終了コード={code}; stdout={captured.out!r}; stderr={captured.err!r}"
+    )
+    print(f"開始状態={before[0]!r}\n中断直前={reached[0]!r}\n終了状態={after!r}")
+    print(f"RNG開始={rng_before!r}\nRNG終了={rng.getstate()!r}")
+    if position == "sleep":
+        assert code == 0 and after == before[0]
+        assert rng.getstate() == rng_before
+        assert "停止" in captured.out and not captured.err
+    else:
+        if position == "delta":
+            completed = len(world.results) >= 2 and len(world.delta_history) == 4
+        else:
+            completed = len(world.results) >= 2 and world.results[1].game_time == world.time
+        explicit_failure = code != 0 and (
+            world.integrity_failure is not None or bool(captured.err.strip())
+        )
+        assert completed or explicit_failure, "未完了tickを異常表示なし・終了コード0で残した"
+
+
+def _m6_daily_pack(content_dir: Path, destination: Path, daily_ids: tuple[str, ...]) -> ContentPack:
+    """日次定義のID以外は維持する。複数指定時のみ同じ定義を複製する。"""
+    shutil.copytree(content_dir, destination)
+    path = destination / "events.yaml"
+    data: dict[str, Any] = yaml.safe_load(path.read_text())
+    daily = next(event for event in data["events"] if event["id"] == "daily")
+    data["events"] = [event for event in data["events"] if event["id"] != "daily"]
+    data["events"].extend({**deepcopy(daily), "id": event_id} for event_id in daily_ids)
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return load_content_pack(destination)
+
+
+def test_m6_renamed_daily_event_runs_before_slot(
+    content_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kankei.runtime import advance_one_tick
+
+    pack = _m6_daily_pack(content_dir, tmp_path / "content", ("day_end",))
+    world = WorldState.new(pack)
+    world.time = GameTime(pack.settings.ticks_per_day - 1)
+    rng = Random(7)
+    rng_before = rng.getstate()
+    pipeline = Pipeline(pack, rng)
+    original_slot = pipeline.run_slot
+    before_slot: list[tuple[tuple[EventResult, ...], bool]] = []
+
+    def trace_slot(current: WorldState) -> SlotReport:
+        before_slot.append((tuple(current.results), rng.getstate() == rng_before))
+        return original_slot(current)
+
+    monkeypatch.setattr(pipeline, "run_slot", trace_slot)
+    report = advance_one_tick(world, pipeline)
+    print(f"改名日次: results={world.results!r}; スロット直前={before_slot!r}")
+    assert before_slot and before_slot[0][1], "日次処理でRNGが消費された"
+    expected_rng = Random(7)
+    expected_rng.random()
+    assert rng.getstate() == expected_rng.getstate()
+    daily_results = [result for result in world.results if result.kind == "day_closed"]
+    assert len(daily_results) == 1, "trigger: dailyの定義がID変更だけで省略された"
+    assert len(report.batches) == 2
+    daily, slot = report.batches
+    assert daily.results[0].event_def_id == "day_end"
+    assert daily.commit_seq < slot.commit_seq
+    assert daily.results[0].game_time == slot.results[0].game_time == world.time
+
+
+@pytest.mark.parametrize("daily_ids", [("daily", "day_end"), ("day_end", "day_end2")])
+def test_m6_multiple_daily_definitions_diagnostic(
+    content_dir: Path, tmp_path: Path, daily_ids: tuple[str, ...]
+) -> None:
+    """受理・実行挙動を観測するだけで、複数件の実行仕様を確定しない。"""
+    from kankei.runtime import advance_one_tick
+
+    pack = _m6_daily_pack(content_dir, tmp_path / "content", daily_ids)
+    assert all(pack.events[event_id].trigger.value == "daily" for event_id in daily_ids)
+    world = WorldState.new(pack)
+    world.time = GameTime(pack.settings.ticks_per_day - 1)
+    report = advance_one_tick(world, Pipeline(pack, Random(7)))
+    print(
+        f"複数日次診断: ロード受理={daily_ids}; "
+        f"実行日次={[r.event_def_id for r in world.results if r.kind == 'day_closed']}; "
+        f"確定順={[(b.commit_seq, b.results[0].event_def_id) for b in report.batches]}"
+    )
+
+
+@pytest.mark.parametrize("speed", ["0", "-1", "nan", "inf", "24"])
+def test_m6_cli_speed_validation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], speed: str
+) -> None:
+    """引数エラーは利用者向けに処理し、未処理例外を外へ漏らさない。"""
+    import subprocess
+    import sys
+
+    from kankei import cli
+    from kankei.runtime import App, FakeClock
+
+    clock = FakeClock()
+    started: list[App] = []
+    original_run = App.run
+
+    class ReviewSleeper:
+        def sleep(self, seconds: float) -> None:
+            clock.advance(1.0)
+            assert clock.now() < 30, "正常速度で停止条件に到達しなかった"
+
+    def observed_run(app: App) -> int:
+        started.append(app)
+        return original_run(app)
+
+    monkeypatch.setattr(cli, "MonotonicClock", lambda: clock)
+    monkeypatch.setattr(cli, "TimeSleeper", ReviewSleeper)
+    monkeypatch.setattr(App, "run", observed_run)
+    code: int | None = None
+    error: Exception | None = None
+    try:
+        code = cli.main(["run", "--speed", speed, "--days", "1"])
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+    except Exception as exc:
+        error = exc
+    captured = capsys.readouterr()
+    print(
+        f"speed={speed}; 終了コード={code}; 未処理例外={error!r}; "
+        f"App実行回数={len(started)}; stdout={captured.out!r}; stderr={captured.err!r}"
+    )
+    if speed == "24":
+        assert error is None and code == 0
+        assert len(started) == 1 and started[0].world.results
+        assert "終了(コード 0)" in captured.out
+    else:
+        process = subprocess.run(
+            [sys.executable, "-m", "kankei.cli", "run", "--speed", speed, "--days", "1"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        print(
+            f"実CLIプロセス: 終了コード={process.returncode}; "
+            f"stdout={process.stdout!r}; stderr={process.stderr!r}"
+        )
+        assert (error is None, code is not None and code != 0, bool(captured.err.strip())) == (
+            True,
+            True,
+            True,
+        )
+        assert "Traceback" not in captured.err and not started
+        assert process.returncode != 0 and process.stderr.strip()
+        assert "Traceback" not in process.stderr and not process.stdout

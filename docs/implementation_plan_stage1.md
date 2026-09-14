@@ -146,7 +146,7 @@ tests/
   - 返答の種別を分割し、fact kind から受諾/拒否を特定できるようにする。開示範囲は `FactSpec`(定義データ)側に置く。
   - 再告白: 拒否時刻から指定日数のクールダウン経過後、同じ告白定義が候補に戻る。状況改善を要求しない。
   - 受諾条件は受け手→告白者の恋愛有効値≥閾値(閾値は定義データ)。受諾時のみ恋愛トラック none→lovers。
-- **M6** 常駐ループとテキスト化:
+- **M6**(完了。詳細は §7) 常駐ループとテキスト化:
   - スケジューラはループ毎に `elapsed = min(実測経過, 上限)` で進める(クランプ方式、正本§8)。仕様として (a) 復帰・再開時は最大で上限分だけゲームが進む、(b) 上限を超える高負荷が続く間は実時間に対してゲーム進行が遅れることを許容する、(c) 上限値は `content/settings.yaml` の設定。
   - 明示的な一時停止・終了後の再起動では、従来どおり実時間の計測基準を置き直す。把握できている停止時間を後から進めない。クランプはこれを代替しない。
   - 実時間の取得は `Clock` Protocol で注入し、テストでは擬似実時間で「長い実測経過が上限に丸められる」「一時停止→再開で停止分が進まない」を検証する。
@@ -306,3 +306,82 @@ WorldState.commit(CommitBatch)                                           [6]
 - 同一分岐内の2件目以降の EventResult は `related_result_id` で先頭の結果を参照する。
 - fact の `source_result_id` は生成元の EventResult。返答 fact は告白結果を指すため、知識から「誰の告白への返答か」を辿れる。
 - 初告白した/された(§14)は `confession` 結果の actor / target 役割から、初めての恋人は `relationship_established` 結果から、後段で検出できる。
+
+## 7. M6 常駐ループと CUI 設計(実装前提示)
+
+### 7.1 実時間→tick 変換の規則(`runtime/scheduler.py: Pacer`)
+
+- **クロック**: `Clock` Protocol(`now() -> float`、単調増加秒)。実物は `time.monotonic()`。壁時計(`time.time` / `datetime.now`)は使わない。テストは値を手で進める `FakeClock`。
+- **状態**: `last_real`(計測基準の実時刻)、`residual`(未消化の実時間、`Fraction` 秒)、`seconds_per_tick = real_seconds_per_game_day / ticks_per_day`(`Fraction`)。
+- **1周期の変換** `advance(now) -> int`(進めるべき tick 数):
+
+```
+raw       = now - last_real
+last_real = now
+elapsed   = min(max(raw, 0), max_real_elapsed_seconds)   # 負(巻き戻り)は 0、上限でクランプ(§8)
+residual += Fraction(elapsed)
+ticks     = floor(residual / seconds_per_tick)
+residual -= ticks * seconds_per_tick                       # 端数は次周期へ持ち越す(0 ≤ residual < seconds_per_tick)
+return ticks
+```
+
+- **端数の累積残余方式**: 端数を切り捨てず `residual` に累積するため、0.4 tick 相当×5 回で正確に 2 tick 進む。`Fraction` により浮動小数の丸めが蓄積しない(monotonic の float は二進有理数なので変換は正確)。
+- **クランプ**: 上限を超えた分は理由を問わず捨てる。復帰時に進むのは最大で上限分。高負荷で毎周期上限を超え続ける間は実時間に対して遅れる(正本§8 の許容挙動)。
+- **速度設定**: `set_speed(real_seconds_per_game_day)` は `seconds_per_tick` だけを変える。`residual`(実秒)と上限はそのまま。速度変更はゲーム内時間の進む速さにのみ影響する。
+- **計測基準の置き直し**: 起動時 `Pacer.start(now)` で `last_real = now`、`residual = 0`。明示的な一時停止・再起動はここを通る(停止分は進まない)。①段階に一時停止 UI はないため、起動時のみ。
+- **ループ周期**: `settings.loop_interval_seconds`(新規、既定 0.25)。ローダで `loop_interval_seconds < max_real_elapsed_seconds` を検証する(周期が上限以上だと通常運転でも毎回クランプされるため)。
+
+### 7.2 メインループの擬似コード(`runtime/app.py: App.run`)
+
+```
+pacer.start(clock.now())
+while True:
+    if world.integrity_failure is not None:          # 修復不能: 新しいスロットを開始しない
+        out.error(world.integrity_failure); return EXIT_INTEGRITY(2)
+    if stop_requested (SIGINT / --days 到達): return 0
+    ticks = pacer.advance(clock.now())
+    for _ in range(ticks):                          # 1 tick ずつ進め、境界を跨がない
+        advance_one_tick(world)                     # ↓ 7.3
+    sleeper.sleep(loop_interval_seconds)
+
+advance_one_tick(world):
+    next_tick = world.time.tick + 1
+    world.time = GameTime(next_tick)                # 処理済み位置 = world.time(M7 はこれを保存)
+    if next_tick % ticks_per_day == 0:              # (1) 日境界: 前日の締め
+        batch = pipeline.run_event(world, "daily", {})   # run_event は乱数を消費しない
+        out.write(render(batch))                    #     区切り行
+    if next_tick % ticks_per_slot == 0:             # (2) 新しい日のスロット
+        report = pipeline.run_slot(world)           #     draw で乱数消費(候補ありのとき1回)
+        if report.batch is not None: out.write(render(report.batch))   # 無イベントは表示しない
+```
+
+- `PipelineError` / `FatalCommitError` / `CommitError` はループを抜けてエラー表示し、非0で終了する。`FatalCommitError` 後は `integrity_failure` が立つので次周期の先頭分岐でも止まる。
+- 例外を捕まえて続行しない(黙って何も起きない状態を作らない)。
+- 不変条件: `world.time` 以下のすべての日境界・スロット境界は処理済み。1 tick ずつ進めるので、大きな `ticks` でも境界を飛ばさない。
+
+### 7.3 日境界とスロットの発火順序
+
+- 同一 tick に日境界とスロット境界が重なる場合(`ticks_per_day` は `event_slots_per_day` で割り切れるため、毎日 tick=`k×ticks_per_day` で必ず重なる)、`advance_one_tick` の中で (1) 日次処理 → (2) スロット抽選の順にコードで固定する。他の場所からスロットや日次を呼ばない(単一関数に集約)。
+- テストは同一 tick の日次結果と slot 結果の `commit_seq` が「日次 < スロット」であることを確認する。
+- 日次処理は履歴マーカー(`day_closed` の EventResult 1件)のみ。遷移評価・持続判定は第③段階。
+
+### 7.4 乱数を消費する箇所(M5 からの更新)
+
+| 箇所 | 消費 |
+|---|---|
+| `engine/candidates.py: draw` | 候補が1件以上あるスロットで `rng.random()` を1回(M5 と同じ) |
+
+追加なし。日次処理は `run_event` 経由で `draw` を通らない。`text/render` は `result_id % len(variants)` で決定的に選び、`Random` を受け取らない。`runtime/` は `Pacer` / `App` とも `Random` を保持せず、`Pipeline` だけが保持する。テストで日次・render・CUI 経路の前後で `rng.getstate()` が不変であることを検証する。
+
+### 7.5 テキスト化(`text/bands.py`, `text/render.py`)
+
+- `render_result(result: EventResult, template: TemplateDef, names: Mapping[CasterId, str], calendar: Calendar, expressed: Sequence[ExpressedView] = ()) -> str`。入力に `WorldState` / `DirectedStore` / 相性値を取れないシグネチャ。
+- `ExpressedView(axis_id, label, hint)` は `text/bands.py: read_expressed(view: DirectedView, axis: AxisDef, src, dst)` からのみ作れ、`axis.role` が latent なら `ValueError`。①段階のテンプレートは役割名・`{day}`(結果時刻の属する日、1始まり)・`{closed_day}`(日境界で締めた日、1始まり)のみ使う。`closed_day` はローダの許可プレースホルダに追加する。
+- 文面は `template.variants[result.result_id % len(template.variants)]`。組込み `hash()` は使わない。
+- 行頭に `[{day}日目 HH:MM]` を付ける(分は `tick_of_day × 1440 / ticks_per_day`)。
+
+### 7.6 CUI(`cli.py`、`[project.scripts] kankei = "kankei.cli:main"` を実体と同時に復活)
+
+- `kankei run [--content DIR] [--seed N] [--speed 実秒/ゲーム日] [--days N]`。`--days` は開発・検証用(N ゲーム日で自動終了。未指定は Ctrl+C まで)。
+- SIGINT(`KeyboardInterrupt`)で「停止」を表示して終了コード 0。整合性失敗は 2、定義・パイプラインの不備は 3。
+- 保存・復元・起動時ロードは M7。一時停止 UI・神視点表示・LLM・スレッドは含めない。
