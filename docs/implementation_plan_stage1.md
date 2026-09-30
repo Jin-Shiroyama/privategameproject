@@ -101,7 +101,7 @@ tests/
 | `Fact` | fact_id, source_result_id, kind, subjects[(caster_id, role)], game_time, commit_seq, track/state_after(任意), audience |
 | `Knowledge` | owner, fact_id, via(participant/witnessed/told), acquired_at, acquired_seq, learned_from(told用に予約) |
 | `CommitBatch` | 適用delta列、pair変更、results、facts、knowledge、cooldown更新、event_instance_id。`WorldState.commit(batch)` が単一の確定単位 |
-| `WorldState` | casters, directed, pairs, results, facts, knowledge, applied_event_ids, next_seq, next_id採番、GameTime、処理済みスロット位置 |
+| `WorldState` | casters, directed, pairs, results, facts, knowledge, applied_event_ids, next_seq, next_id採番、GameTime、処理済みスロット位置、integrity_failure、tick_in_progress(実行時の目印、§7.2b) |
 
 ### エンジン(§7 の参照情報の使い分け)
 
@@ -155,7 +155,7 @@ tests/
 - **M7** 保存と受け入れテスト:
   - スナップショット: WorldState + GameTime + `random.getstate()` + 処理済みスロット位置(明示保存) + 未処理作業(①段階では空だが枠を保存) + applied_event_ids + ID採番の次値 + 定義版。
   - 保存できるタイミングはスロット処理の間(直前の `commit` 完了後、次の抽選前)のみ。確定単位の途中では保存しない。
-  - `WorldState.integrity_failure` が設定されている世界は保存しない(FatalCommitError 後は停止し、直前の正常なセーブを残す)。
+  - `WorldState.integrity_failure` が設定されている世界、および `WorldState.tick_in_progress is not None`(tick 途中で止まった世界)は保存しない(停止し、直前の正常なセーブを残す)。§7.2b 参照。
   - 書込みは同一ファイルシステムの一時ファイル→fsync→`os.replace`。
   - 完成条件:
     1. `commit` 途中で検証に失敗しても、世界状態の一部だけが更新されない(検証を先に完了してから差し替える)。
@@ -163,7 +163,7 @@ tests/
     3. イベントなしのスロットも含め、再開後に抽選を重複実行しない。
     4. 定義版が違うセーブを、黙って現在の定義で再開しない(エラーにする)。
     5. 保存に失敗しても、直前の正常なセーブを読み込める。
-    6. `integrity_failure` が設定された世界状態のスナップショット保存が拒否され、既存のセーブが上書きされない(M3からの引き継ぎ。M3時点では計画追記のみで未実装。pytestで明示的に検証する)。
+    6. `integrity_failure` が設定された世界状態、および `tick_in_progress is not None` の世界状態のスナップショット保存が拒否され、既存のセーブが上書きされない(M3・M6修正からの引き継ぎ。pytestで明示的に検証する)。
   - 主検証(`test_determinism.py`): 同一seedの連続実行でイベント列・ログが完全一致。途中保存→再開したイベント列・ログが、保存せず続けた実行と完全一致。前提条件はテンプレート内容・並び順・定義版が同一であること。
   - 補助検証: `src/` で `random` モジュールのグローバル関数・`datetime.now`・組込み `hash()` が使われていないことのgrep検査。
   - 受け入れテスト: §12の1・2・11・12、§22 ①観点(発言と小声の返答で開示先が分かれる、内面delta非fact化、保存再開での時刻とRNG系列維持、相性の二重加算なし)。
@@ -338,32 +338,59 @@ pacer.start(clock.now())
 while True:
     if world.integrity_failure is not None:          # 修復不能: 新しいスロットを開始しない
         out.error(world.integrity_failure); return EXIT_INTEGRITY(2)
-    if stop_requested (SIGINT / --days 到達): return 0
+    if world.tick_in_progress is not None:           # tick 途中で止まった世界: 進めない
+        out.error(...); return EXIT_INTEGRITY(2)
+    if stop_requested (1回目の SIGINT / --days 到達): return 0   # tick 境界でのみ確認
     ticks = pacer.advance(clock.now())
     for _ in range(ticks):                          # 1 tick ずつ進め、境界を跨がない
-        advance_one_tick(world)                     # ↓ 7.3
+        if stop_requested: break                    # 停止要求は tick の間でのみ確認
+        advance_one_tick(world)                     # ↓ 7.3(tick の中では停止要求を見ない)
     sleeper.sleep(loop_interval_seconds)
 
 advance_one_tick(world):
+    assert world.tick_in_progress is None           # 立っていれば PipelineError
     next_tick = world.time.tick + 1
-    world.time = GameTime(next_tick)                # 処理済み位置 = world.time(M7 はこれを保存)
+    if next_tick % ticks_per_day == 0:
+        daily = pack.daily_events()                 # trigger: daily で選ぶ(ID に依存しない)
+        if len(daily) != 1: raise PipelineError     # 世界を変える前に検出
+    world.time = GameTime(next_tick)
+    world.tick_in_progress = world.time             # tick 開始の目印(§7.2b)
     if next_tick % ticks_per_day == 0:              # (1) 日境界: 前日の締め
-        batch = pipeline.run_event(world, "daily", {})   # run_event は乱数を消費しない
+        batch = pipeline.run_event(world, daily[0].id, {})   # run_event は乱数を消費しない
         out.write(render(batch))                    #     区切り行
     if next_tick % ticks_per_slot == 0:             # (2) 新しい日のスロット
         report = pipeline.run_slot(world)           #     draw で乱数消費(候補ありのとき1回)
         if report.batch is not None: out.write(render(report.batch))   # 無イベントは表示しない
+    world.tick_in_progress = None                   # 日次・スロットがすべて確定した後にだけ戻す
 ```
 
 - `PipelineError` / `FatalCommitError` / `CommitError` はループを抜けてエラー表示し、非0で終了する。`FatalCommitError` 後は `integrity_failure` が立つので次周期の先頭分岐でも止まる。
 - 例外を捕まえて続行しない(黙って何も起きない状態を作らない)。
-- 不変条件: `world.time` 以下のすべての日境界・スロット境界は処理済み。1 tick ずつ進めるので、大きな `ticks` でも境界を飛ばさない。
+- 不変条件: `world.tick_in_progress is None` のとき、`world.time` 以下のすべての日境界・スロット境界は処理済み。1 tick ずつ進めるので、大きな `ticks` でも境界を飛ばさない。
+
+### 7.2b 時刻の不変条件と中断の印(M6差し戻し対応で確定)
+
+- **採用方式**: 処理済み位置を別に記録する方式。`WorldState.tick_in_progress: GameTime | None` を tick 開始時に処理中の時刻へ設定し、その tick の日次・スロットがすべて確定した後にだけ `None` に戻す。例外(強制中断を含む)で抜けた場合は設定されたまま残る。
+  - 見送った案: `world.time` を tick の最後に更新する方式。`EventContext.capture`・`commit` のクールダウン検証・既存テストが「`world.time` = イベント発生時刻」を前提にしており、全入口に時刻引数を通す必要があるため。
+- **`tick_in_progress` は実行時の目印であり、世界の内容ではない**。`commit`(一括確定)の外で書き換わり、確定単位にも fact・知識にも含めない。
+- **不変条件**: `tick_in_progress is None` のとき、`world.time` = 処理済みの位置(その tick の日次・スロットは確定済み)。
+- **印の意味の区別**:
+
+| 印 | 意味 | 設定する箇所 |
+|---|---|---|
+| `integrity_failure` | commit の適用途中で中断した(部分更新あり) | `WorldState.commit` の例外捕捉のみ(`Exception` は `FatalCommitError` に包む、それ以外の `BaseException` は元の例外のまま再送出) |
+| `tick_in_progress` | tick の途中で止まった(確定済みのバッチは整合、tick の残りは未処理) | `advance_one_tick` の開始時。完了時に `None` |
+| 終了コード 130 | 2回目の SIGINT による強制中断 | CLI。正常終了の経路を通らずに抜けることで保存しないことを保証する。スリープ中の2回目ではどの印も設定しない |
+
+- **M7 の保存拒否条件**: `integrity_failure is not None` または `tick_in_progress is not None` の世界は保存しない。
+- `App` は周期の先頭で両方を確認し、どちらかが立っていれば新しい tick を始めず `EXIT_INTEGRITY` で止まる。`advance_one_tick` も `tick_in_progress` が立った世界では `PipelineError`。
 
 ### 7.3 日境界とスロットの発火順序
 
 - 同一 tick に日境界とスロット境界が重なる場合(`ticks_per_day` は `event_slots_per_day` で割り切れるため、毎日 tick=`k×ticks_per_day` で必ず重なる)、`advance_one_tick` の中で (1) 日次処理 → (2) スロット抽選の順にコードで固定する。他の場所からスロットや日次を呼ばない(単一関数に集約)。
 - テストは同一 tick の日次結果と slot 結果の `commit_seq` が「日次 < スロット」であることを確認する。
 - 日次処理は履歴マーカー(`day_closed` の EventResult 1件)のみ。遷移評価・持続判定は第③段階。
+- **日次イベントの選択と件数制約(M6差し戻し対応で確定)**: 日次イベントは ID ではなく `trigger: daily` で選ぶ(`ContentPack.daily_events()`)。第①段階では `trigger: daily` のイベントを**ちょうど1件**に限定し、ローダで検証する(0件・2件以上は `DefinitionError`)。複数の日次イベントの実行順は正本に規定がないため決めない。ローダを迂回したパックでも、日境界で件数が1件でなければ世界を変える前に `PipelineError`(黙って省略しない)。スロットの候補収集(`collect_candidates`)は `trigger is LOTTERY` のイベントだけを対象にし、日次イベントは抽選候補に入らない。
 
 ### 7.4 乱数を消費する箇所(M5 からの更新)
 
@@ -383,5 +410,9 @@ advance_one_tick(world):
 ### 7.6 CUI(`cli.py`、`[project.scripts] kankei = "kankei.cli:main"` を実体と同時に復活)
 
 - `kankei run [--content DIR] [--seed N] [--speed 実秒/ゲーム日] [--days N]`。`--days` は開発・検証用(N ゲーム日で自動終了。未指定は Ctrl+C まで)。
-- SIGINT(`KeyboardInterrupt`)で「停止」を表示して終了コード 0。整合性失敗は 2、定義・パイプラインの不備は 3。
+- **Ctrl+C の2段階停止(M6差し戻し対応で確定)**: `cli.run_app` が `signal.signal(SIGINT, handler)` を登録し、終了時に元のハンドラへ戻す(`App` はシグナルに触れず、ライブラリとして使うテストに副作用を残さない)。
+  - 1回目: ハンドラは停止要求のフラグを立てるだけ。ループは tick 境界でフラグを確認し、処理中の tick(日次・スロット)を完了してから「停止」を表示して終了コード 0。部分更新・印は残らない。
+  - 2回目: ハンドラが `KeyboardInterrupt` を送出して即時中断し、終了コード **130**(128 + SIGINT)。印は §7.2b の表のとおり(commit 途中なら `integrity_failure`、tick 途中なら `tick_in_progress`、スリープ中ならなし)。`KeyboardInterrupt` を握りつぶして処理を続行しない。
+  - 整合性失敗(`integrity_failure` / `tick_in_progress`)は 2、定義・パイプラインの不備は 3、不正な引数は argparse の 2。
+- **`--speed` の値域**: `runtime/scheduler.py: validate_speed`(有限かつ正)を唯一の正本とし、`Fraction` への変換より前に `math.isfinite` で検証する。`Pacer.set_speed` と argparse の `type=`(`cli.parse_speed`、失敗時 `ArgumentTypeError`)の両方がこれを呼ぶ。`0`・負・`nan`・`inf` はトレースバックなしで拒否され、イベントを1件も実行しない。
 - 保存・復元・起動時ロードは M7。一時停止 UI・神視点表示・LLM・スレッドは含めない。
