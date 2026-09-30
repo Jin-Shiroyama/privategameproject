@@ -28,6 +28,7 @@ from kankei.model import (
     EventResult,
     Fact,
     FactId,
+    FatalCommitError,
     GameTime,
     Knowledge,
     KnowledgeVia,
@@ -37,8 +38,10 @@ from kankei.model import (
     Participant,
     ResultId,
     WorldState,
+    pair_key,
 )
 from kankei.model.pair import PairKey
+from kankei.runtime import EXIT_INTEGRITY, App, FakeClock, NoSleep, advance_one_tick
 
 A = CasterId("aoi")
 B = CasterId("haru")
@@ -574,3 +577,182 @@ def test_m5_all_pairs_ineligible_across_slots(pack: ContentPack) -> None:
     before.pop("time")
     assert after == before
     assert rng.getstate() == rng_before
+
+
+# --- M3修正後の補足検証(旧 test_commit_integrity_supplement.py から内容を変えずに集約) ----------
+# 部分更新後の停止と初期ペアキーの不一致を確認する。
+
+
+def test_partial_apply_failure_preserves_cause_and_blocks_further_commit(
+    pack: ContentPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """delta・履歴更新後の例外を隔離し、後続バッチによる更新を拒否する。"""
+    world = _world(pack)
+    batch = _batch(world)
+    world.validate(batch)
+    before = _snapshot(world)
+    previous_history = list(world.delta_history)
+    injected = RuntimeError("補足検証: deltaと履歴更新後のペア適用失敗")
+    reached: list[PairState] = []
+    original_put = world.pairs.put
+
+    def fail_pair_apply(state: PairState) -> None:
+        # 例外を出す瞬間に、先行する更新が実際に完了していることを確認する。
+        assert world.directed.stored(A, B, "favor") == batch.deltas[0].stored_after
+        assert world.delta_history == [*previous_history, *batch.deltas]
+        reached.append(state.copy())
+        raise injected
+
+    with monkeypatch.context() as patch:
+        patch.setattr(world.pairs, "put", fail_pair_apply)
+        with pytest.raises(FatalCommitError) as failure:
+            world.commit(batch)
+
+    assert reached == [batch.pair_changes[0].state]
+    assert world.pairs.put == original_put
+    assert failure.value.__cause__ is injected
+    assert world.integrity_failure is not None
+    assert str(injected) in world.integrity_failure
+    assert str(batch.event_instance_id) in world.integrity_failure
+    after_failure = _snapshot(world)
+    assert {key for key in before if before[key] != after_failure[key]} == {
+        "directed",
+        "delta_history",
+        "integrity_failure",
+    }
+    assert world.directed.stored(A, B, "favor") == 8
+    assert world.delta_history == [*previous_history, *batch.deltas]
+
+    # 現在値に合わせた正常バッチを作り、別世界で正常確定できることも確認する。
+    # 検証対象の世界のフラグは解除しない。
+    followup = _batch(world)
+    control = deepcopy(world)
+    control.integrity_failure = None
+    control.commit(followup)
+    assert control.directed.stored(A, B, "favor") == 12
+
+    with pytest.raises(CommitError, match="修復不能") as rejected:
+        world.commit(followup)
+    assert _snapshot(world) == after_failure
+    print(f"初回例外={failure.value!r}; 元例外={failure.value.__cause__!r}")
+    print(f"後続拒否={rejected.value!r}; 拒否後の全状態差分なし")
+
+
+def test_constructor_rejects_distinct_normalized_keys_without_mutating_input(
+    pack: ContentPack,
+) -> None:
+    """辞書キーもstate.keyも単独では正常だが、互いに異なる入力を拒否する。"""
+    store = PairStore(pack.tracks)
+    dictionary_key = pair_key(A, B)
+    state = store.get(A, C)
+    assert dictionary_key == (A, B)
+    assert state.key == (A, C)
+    assert dictionary_key != state.key
+    store.validate(state)
+    states = {dictionary_key: state}
+    before_dictionary = deepcopy(states)
+    before_state = deepcopy(state)
+    tracks = state.track_states
+
+    with pytest.raises(ValueError, match="一致しません") as rejected:
+        PairStore(pack.tracks, states)
+
+    assert states == before_dictionary
+    assert state == before_state
+    assert states[dictionary_key] is state
+    assert state.track_states is tracks
+    print(f"キー不一致の拒否={rejected.value!r}; 入力辞書・PairStateの変更なし")
+
+
+# --- M6修正A: commit の保険(BaseException)と tick_in_progress の不変条件 -----------------------
+
+
+class _Abort(BaseException):
+    """テスト用の Exception 以外の中断。"""
+
+
+@pytest.mark.parametrize(
+    "interrupt", [KeyboardInterrupt, _Abort], ids=["KeyboardInterrupt", "other"]
+)
+def test_commit_base_exception_sets_integrity_failure_and_reraises(
+    pack: ContentPack, monkeypatch: pytest.MonkeyPatch, interrupt: type[BaseException]
+) -> None:
+    """適用途中の BaseException は integrity_failure を設定し、元の例外のまま再送出する。"""
+    world = _world(pack)
+    batch = _batch(world)
+    raised = interrupt()
+
+    def interrupted_put(state: PairState) -> None:
+        raise raised
+
+    with monkeypatch.context() as patch:
+        patch.setattr(world.pairs, "put", interrupted_put)
+        with pytest.raises(interrupt) as caught:
+            world.commit(batch)
+
+    assert caught.value is raised  # FatalCommitError に包まず、握りつぶしもしない
+    assert world.integrity_failure is not None
+    assert "中断" in world.integrity_failure
+    assert str(batch.event_instance_id) in world.integrity_failure
+    # 部分更新(delta・履歴)は残っており、以後の確定は拒否される
+    assert world.delta_history[-len(batch.deltas) :] == list(batch.deltas)
+    with pytest.raises(CommitError, match="修復不能"):
+        world.commit(_batch(world))
+
+
+def test_tick_in_progress_is_none_and_time_is_processed_after_each_tick(pack: ContentPack) -> None:
+    """不変条件: tick 完了後は tick_in_progress が None で、world.time が処理済みの位置。"""
+    world = WorldState.new(pack)
+    pipeline = Pipeline(pack, Random(3))
+    assert world.tick_in_progress is None
+    for expected in range(1, 3 * pack.settings.ticks_per_day + 1):
+        report = advance_one_tick(world, pipeline)
+        assert world.tick_in_progress is None
+        assert world.time == report.time == GameTime(expected)
+        assert all(r.game_time <= world.time for r in world.results)
+    closed = [r.game_time for r in world.results if r.kind == "day_closed"]
+    assert closed == [GameTime(24), GameTime(48), GameTime(72)]
+
+
+def test_tick_in_progress_remains_when_tick_is_interrupted(
+    pack: ContentPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """日次確定後・スロット前に例外で抜けると tick_in_progress が残り、以後は進まない。"""
+    world = WorldState.new(pack)
+    world.time = GameTime(23)
+    pipeline = Pipeline(pack, Random(3))
+
+    def interrupted_slot(w: WorldState) -> SlotReport:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline, "run_slot", interrupted_slot)
+    with pytest.raises(KeyboardInterrupt):
+        advance_one_tick(world, pipeline)
+    # 日次は確定済み、スロットは未処理。commit の外なので integrity_failure は立たない
+    assert [r.kind for r in world.results] == ["day_closed"]
+    assert world.integrity_failure is None
+    assert world.tick_in_progress == GameTime(24)
+    assert world.time == GameTime(24)  # tick_in_progress が立つ間は処理済みの位置ではない
+
+    monkeypatch.undo()
+    before = _snapshot(world)
+    with pytest.raises(PipelineError, match="完了していない"):
+        advance_one_tick(world, pipeline)
+    assert _snapshot(world) == before
+
+    out_errors: list[str] = []
+
+    class _Out:
+        def line(self, text: str) -> None:
+            raise AssertionError(text)
+
+        def error(self, text: str) -> None:
+            out_errors.append(text)
+
+    clock = FakeClock()
+    app = App(pack, world, pipeline, clock, NoSleep(), _Out())
+    app.pacer.start(clock.now())
+    clock.advance(2.0)
+    assert app.run_one_cycle() == EXIT_INTEGRITY
+    assert out_errors and "完了していない" in out_errors[0]
+    assert _snapshot(world) == before

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+import os
+import signal
 from copy import deepcopy
 from dataclasses import fields, replace
 from fractions import Fraction
@@ -10,10 +13,11 @@ from typing import Any
 
 import pytest
 
-from kankei.cli import main
+from kankei.cli import EXIT_INTERRUPTED, main, parse_speed, run_app
 from kankei.definitions import ContentPack, DefinitionError, load_content_pack
-from kankei.engine import Pipeline, PipelineError
-from kankei.model import Calendar, CasterId, GameTime, WorldState
+from kankei.definitions.schema import OccurrenceDef
+from kankei.engine import EventContext, Pipeline, PipelineError, collect_candidates
+from kankei.model import AppliedDelta, Calendar, CasterId, CommitBatch, GameTime, WorldState
 from kankei.runtime import (
     EXIT_INTEGRITY,
     EXIT_OK,
@@ -23,6 +27,7 @@ from kankei.runtime import (
     NoSleep,
     Pacer,
     advance_one_tick,
+    validate_speed,
 )
 from kankei.text import read_expressed, render_batch, render_result
 from kankei.text.bands import band_label
@@ -369,3 +374,287 @@ def test_cli_rejects_bad_content(tmp_path: Any, capsys: pytest.CaptureFixture[st
     code = main(["run", "--content", str(tmp_path / "nope")])
     assert code == EXIT_PIPELINE
     assert "定義データを読み込めません" in capsys.readouterr().err
+
+
+# --- 修正B: 日次イベントは trigger で選ぶ -------------------------------------------------------
+
+
+def _one_random_call(seed: int) -> object:
+    """seed から rng.random() を1回だけ呼んだ後の状態。"""
+    r = Random(seed)
+    r.random()
+    return r.getstate()
+
+
+def test_daily_selected_by_trigger_even_if_id_changes(mutated_pack: Any) -> None:
+    def rename(d: dict[str, Any]) -> None:
+        daily = next(e for e in d["events"] if e.get("trigger") == "daily")
+        daily["id"] = "day_end"
+
+    renamed = load_content_pack(mutated_pack("events.yaml", rename))
+    assert "daily" not in renamed.events
+    world = WorldState.new(renamed)
+    rng = Random(1)
+    pipeline = Pipeline(renamed, rng)
+    world.time = GameTime(23)
+    report = advance_one_tick(world, pipeline)
+    daily, slot = report.batches
+    assert daily.results[0].kind == "day_closed"
+    assert "day_end" in str(daily.event_instance_id)
+    assert daily.commit_seq < slot.commit_seq  # 同 tick のスロットより先に確定
+    # 乱数の消費はスロットの draw の1回だけ(日次は消費しない)
+    assert rng.getstate() == _one_random_call(1)
+    lines = render_batch(daily, renamed, {AOI: "葵", HARU: "晴"}, Calendar(24))
+    assert any("1日目が終わった" in line for line in lines)
+
+
+def test_daily_event_is_never_a_slot_candidate(pack: ContentPack) -> None:
+    """occurrence を無理に付けても(ローダを迂回)、trigger: daily は抽選候補にならない。"""
+    daily = pack.daily_events()[0]
+    forced = replace(daily, occurrence=OccurrenceDef(weight=1000, when=()))
+    forced_pack = replace(pack, events={**pack.events, daily.id: forced})
+    world = WorldState.new(forced_pack)
+    ctx = EventContext.capture(world, forced_pack)
+    candidates = collect_candidates(forced_pack, ctx)
+    assert candidates
+    assert all(c.event_def_id != daily.id for c in candidates)
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_step_rejects_pack_without_exactly_one_daily(pack: ContentPack, count: int) -> None:
+    """ローダを迂回したパックでも、日境界で黙って省略せず世界を変える前に止まる。"""
+    daily = pack.daily_events()[0]
+    others = {k: v for k, v in pack.events.items() if v.trigger is not daily.trigger}
+    extra = {f"daily{i}": replace(daily, id=f"daily{i}") for i in range(count)}
+    bad = replace(pack, events={**others, **extra})
+    world = WorldState.new(bad)
+    world.time = GameTime(23)
+    rng = Random(1)
+    before = _snapshot(world)
+    with pytest.raises(PipelineError, match="ちょうど1件"):
+        advance_one_tick(world, Pipeline(bad, rng))
+    assert _snapshot(world) == before
+    assert rng.getstate() == Random(1).getstate()
+
+
+# --- 修正C: --speed の値域 ---------------------------------------------------------------------
+
+
+BAD_SPEEDS = ["0", "-1", "nan", "inf"]
+
+
+@pytest.mark.parametrize("text", BAD_SPEEDS)
+def test_cli_rejects_bad_speed_without_traceback(
+    text: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import kankei.runtime.app as app_mod
+
+    ticks: list[object] = []
+    monkeypatch.setattr(app_mod, "advance_one_tick", lambda *a: ticks.append(a))
+    with pytest.raises(SystemExit) as exited:
+        main(["run", "--speed", text, "--days", "1"])
+    captured = capsys.readouterr()
+    assert exited.value.code == 2
+    assert "--speed" in captured.err and "有限の正の数" in captured.err
+    assert "Traceback" not in captured.err
+    assert captured.out == ""
+    assert ticks == []  # イベントを1件も実行しない
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, math.nan, math.inf, -math.inf])
+def test_set_speed_rejects_same_range_outside_cli(value: float) -> None:
+    p = _pacer(speed=120.0)
+    before = p.seconds_per_tick
+    with pytest.raises(ValueError, match="有限の正の数"):
+        validate_speed(value)
+    with pytest.raises(ValueError, match="有限の正の数"):
+        p.set_speed(value)
+    assert p.seconds_per_tick == before
+
+
+def test_positive_finite_speed_is_accepted() -> None:
+    assert parse_speed("0.01") == 0.01
+    assert validate_speed(48.0) == 48.0
+    p = _pacer(speed=120.0)
+    p.set_speed(48.0)
+    assert p.seconds_per_tick == Fraction(2)
+
+
+# --- 修正A: Ctrl+C(実際の SIGINT)の2段階停止 --------------------------------------------------
+
+
+def _sigint() -> None:
+    os.kill(os.getpid(), signal.SIGINT)
+
+
+class _TickingSleep:
+    """sleep のたびに FakeClock を進める(実時間は待たない)。on_sleep で割込みを差し込める。"""
+
+    def __init__(self, clock: FakeClock, step: float = 2.0) -> None:
+        self.clock = clock
+        self.step = step
+        self.calls = 0
+        self.on_sleep: Any = None
+
+    def sleep(self, seconds: float) -> None:
+        self.calls += 1
+        if self.on_sleep is not None:
+            self.on_sleep(self.calls)
+        self.clock.advance(self.step)
+
+
+def _signal_app(pack: ContentPack, seed: int = 3) -> tuple[App, _TickingSleep, ListOutput]:
+    clock = FakeClock()
+    sleeper = _TickingSleep(clock)
+    out = ListOutput()
+    guard_day = Calendar(pack.settings.ticks_per_day)
+    # 安全弁: シグナルが効かなかった場合に無限ループしない(効いていれば到達しない)
+    app = App(
+        pack,
+        WorldState.new(pack),
+        Pipeline(pack, Random(seed)),
+        clock,
+        sleeper,
+        out,
+        stop_when=lambda w: guard_day.day(w.time) >= 30,
+    )
+    return app, sleeper, out
+
+
+class _KillOnAppend(list[AppliedDelta]):
+    """delta 履歴への追加直後に SIGINT を送る(commit 適用の途中)。"""
+
+    def __init__(self, items: list[AppliedDelta], kills: int, world: WorldState) -> None:
+        super().__init__(items)
+        self.kills = kills
+        self.world = world
+        self.fired_at: GameTime | None = None
+
+    def append(self, item: AppliedDelta) -> None:
+        super().append(item)
+        if self.fired_at is None:
+            self.fired_at = self.world.tick_in_progress
+            for _ in range(self.kills):
+                _sigint()
+
+
+def _assert_consistent(world: WorldState) -> None:
+    result_ids = {r.result_id for r in world.results}
+    assert all(d.result_id in result_ids for d in world.delta_history)
+
+
+def test_first_sigint_during_commit_completes_tick_and_exits_0(pack: ContentPack) -> None:
+    app, _sleeper, out = _signal_app(pack)
+    world = app.world
+    history = _KillOnAppend([], kills=1, world=world)
+    world.delta_history = history
+    original = signal.getsignal(signal.SIGINT)
+    code = run_app(app, out)
+    assert signal.getsignal(signal.SIGINT) is original  # ハンドラは元に戻る
+    assert code == EXIT_OK
+    assert history.fired_at is not None
+    assert world.integrity_failure is None and world.tick_in_progress is None
+    _assert_consistent(world)  # 部分更新なし: 中断した commit の結果も登録済み
+    assert world.time == history.fired_at  # その tick を完了して停止
+    assert out.lines[-1] == "=== 停止(Ctrl+C) ==="
+
+
+def test_first_sigint_after_daily_before_slot_completes_tick(
+    pack: ContentPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _sleeper, out = _signal_app(pack)
+    world = app.world
+    pipeline = app.pipeline
+    original_run_event = pipeline.run_event
+    fired: list[CommitBatch] = []
+
+    def run_event_then_sigint(w: WorldState, event_id: str, binding: Any) -> CommitBatch:
+        batch = original_run_event(w, event_id, binding)
+        if not fired:
+            fired.append(batch)
+            _sigint()  # 日次確定後・同 tick のスロット開始前
+        return batch
+
+    monkeypatch.setattr(pipeline, "run_event", run_event_then_sigint)
+    assert run_app(app, out) == EXIT_OK
+    daily_time = fired[0].results[0].game_time
+    assert world.time == daily_time  # 停止後の時刻 = 処理済みの位置
+    assert world.tick_in_progress is None and world.integrity_failure is None
+    same_tick = [r for r in world.results if r.game_time == daily_time]
+    assert same_tick[0].kind == "day_closed"
+    assert len(same_tick) >= 2  # 同 tick のスロットも処理された
+    assert max(r.game_time for r in world.results) == daily_time
+
+
+def test_first_sigint_during_sleep_stops_normally(pack: ContentPack) -> None:
+    app, sleeper, out = _signal_app(pack)
+    stopped_at: list[GameTime] = []
+
+    def on_sleep(calls: int) -> None:
+        if calls == 7:
+            stopped_at.append(app.world.time)
+            _sigint()
+
+    sleeper.on_sleep = on_sleep
+    assert run_app(app, out) == EXIT_OK
+    assert app.world.time == stopped_at[0]  # 処理外の停止要求では以後の tick を進めない
+    assert app.world.integrity_failure is None and app.world.tick_in_progress is None
+    _assert_consistent(app.world)
+
+
+def test_second_sigint_during_commit_marks_integrity_failure(pack: ContentPack) -> None:
+    app, _sleeper, out = _signal_app(pack)
+    world = app.world
+    history = _KillOnAppend([], kills=2, world=world)
+    world.delta_history = history
+    original = signal.getsignal(signal.SIGINT)
+    code = run_app(app, out)
+    assert signal.getsignal(signal.SIGINT) is original
+    assert code == EXIT_INTERRUPTED == 130
+    assert world.integrity_failure is not None and "中断" in world.integrity_failure
+    assert world.tick_in_progress == history.fired_at
+    assert out.errors and "強制中断" in out.errors[-1]
+    assert "=== 停止(Ctrl+C) ===" not in out.lines
+
+
+def test_second_sigint_after_daily_leaves_tick_in_progress(
+    pack: ContentPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _sleeper, out = _signal_app(pack)
+    world = app.world
+    pipeline = app.pipeline
+    original_run_event = pipeline.run_event
+
+    def run_event_then_two_sigints(w: WorldState, event_id: str, binding: Any) -> CommitBatch:
+        batch = original_run_event(w, event_id, binding)
+        _sigint()
+        _sigint()
+        return batch
+
+    monkeypatch.setattr(pipeline, "run_event", run_event_then_two_sigints)
+    assert run_app(app, out) == EXIT_INTERRUPTED
+    assert world.integrity_failure is None  # commit の外なので部分更新なし
+    assert world.tick_in_progress == world.time == GameTime(pack.settings.ticks_per_day)
+    assert [r.kind for r in world.results if r.game_time == world.time] == ["day_closed"]
+
+
+def test_second_sigint_during_sleep_sets_no_marks(pack: ContentPack) -> None:
+    app, sleeper, out = _signal_app(pack)
+
+    def on_sleep(calls: int) -> None:
+        if calls == 7:
+            _sigint()
+            _sigint()
+
+    sleeper.on_sleep = on_sleep
+    assert run_app(app, out) == EXIT_INTERRUPTED
+    assert app.world.integrity_failure is None and app.world.tick_in_progress is None
+    _assert_consistent(app.world)
+
+
+def test_app_as_library_does_not_touch_sigint(pack: ContentPack) -> None:
+    original = signal.getsignal(signal.SIGINT)
+    app, _clock, _out, _ = _app(pack, seed=1)
+    app.request_stop()
+    assert app.run() == EXIT_OK
+    assert signal.getsignal(signal.SIGINT) is original

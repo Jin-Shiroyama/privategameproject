@@ -83,6 +83,11 @@ class WorldState:
     next_fact_id: int = 1
     next_commit_seq: int = 1
     integrity_failure: str | None = None
+    # 実行時の目印(世界の内容ではない)。tick の処理(日次・スロット)中だけ処理中の時刻を持ち、
+    # すべて確定した時点で None に戻る。commit の外で書き換わる。
+    # 不変条件: `tick_in_progress is None` のとき `time` = 処理済みの位置。
+    # None 以外のまま残っていれば tick 途中で止まった世界であり、保存してはならない(M7)。
+    tick_in_progress: GameTime | None = None
 
     @classmethod
     def new(cls, pack: ContentPack, resolver: EffectiveValueResolver | None = None) -> WorldState:
@@ -255,6 +260,8 @@ class WorldState:
         検証(`validate`)は適用段で拒否され得る条件をすべて先回りして `CommitError` にする。
         万一、適用中に例外が起きた場合は部分更新が残り得るため `integrity_failure` を記録し、
         `FatalCommitError` にする。以後この世界状態は確定も保存も受け付けない。
+        `Exception` 以外の `BaseException`(強制中断の `KeyboardInterrupt` 等)も同様に記録し、
+        元の例外のまま再送出する(握りつぶして続行しない)。
         """
         self.validate(batch)
         try:
@@ -264,6 +271,11 @@ class WorldState:
                 f"イベント実体 {batch.event_instance_id} の適用中に例外: {exc!r}"
             )
             raise FatalCommitError(self.integrity_failure) from exc
+        except BaseException as exc:
+            self.integrity_failure = (
+                f"イベント実体 {batch.event_instance_id} の適用中に中断: {exc!r}"
+            )
+            raise
 
     def _apply(self, batch: CommitBatch) -> None:
         # ここに置く処理は、validate を通過した入力に対して失敗しない単純な代入のみにする

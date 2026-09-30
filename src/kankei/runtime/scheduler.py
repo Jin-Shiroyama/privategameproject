@@ -8,7 +8,22 @@
 
 from __future__ import annotations
 
+import math
 from fractions import Fraction
+
+
+def validate_speed(real_seconds_per_game_day: float) -> float:
+    """進行速度(1ゲーム日あたりの実秒)の値域検証。有限かつ正のみ受け付ける。
+
+    速度の値域の唯一の正本。`Fraction` への変換より前に有限性を確かめる
+    (nan / inf は変換自体が ValueError / OverflowError になるため)。
+    """
+    if not math.isfinite(real_seconds_per_game_day) or real_seconds_per_game_day <= 0:
+        raise ValueError(
+            f"進行速度は有限の正の数にしてください(1ゲーム日あたりの実秒): "
+            f"{real_seconds_per_game_day!r}"
+        )
+    return real_seconds_per_game_day
 
 
 class Pacer:
@@ -44,8 +59,7 @@ class Pacer:
 
     def set_speed(self, real_seconds_per_game_day: float) -> None:
         """進行速度を変える。ゲーム内時間の進む速さだけに影響する。"""
-        if real_seconds_per_game_day <= 0:
-            raise ValueError("実時間の設定は正の数")
+        validate_speed(real_seconds_per_game_day)
         self._seconds_per_tick = Fraction(real_seconds_per_game_day) / self._ticks_per_day
 
     def advance(self, now: float) -> int:

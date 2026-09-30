@@ -2,7 +2,7 @@
 
 from kankei.runtime.app import EXIT_INTEGRITY, EXIT_OK, EXIT_PIPELINE, App, Output
 from kankei.runtime.clock import Clock, FakeClock, MonotonicClock, NoSleep, Sleeper, TimeSleeper
-from kankei.runtime.scheduler import Pacer
+from kankei.runtime.scheduler import Pacer, validate_speed
 from kankei.runtime.step import advance_one_tick
 
 __all__ = [
@@ -19,4 +19,5 @@ __all__ = [
     "Sleeper",
     "TimeSleeper",
     "advance_one_tick",
+    "validate_speed",
 ]

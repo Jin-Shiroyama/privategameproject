@@ -1,7 +1,10 @@
 """常駐ループ(App)。計画書§7.2。
 
 - 周期ごとに: 整合性確認 → 停止判定 → 実時間→tick 変換 → 1 tick ずつ進行 → 描写 → sleep。
-- `integrity_failure` が立った世界では新しいスロットを開始せず停止する(保存拒否は M7)。
+- `integrity_failure` / `tick_in_progress` が立った世界では新しいスロットを開始せず停止する
+  (保存拒否は M7)。
+- 停止要求(`request_stop`)は tick の境界でのみ確認する。処理中の tick は完了してから止まる。
+- シグナルには触れない。SIGINT の登録・解除は実行入口(`cli.py`)が行う。
 - 例外(PipelineError / CommitError / FatalCommitError)は捕まえて続行しない。
 """
 
@@ -78,6 +81,10 @@ class App:
         """1周期。終了コードを返せば停止、None なら継続。"""
         if self.world.integrity_failure is not None:
             self.out.error(f"世界状態が修復不能のため停止します: {self.world.integrity_failure}")
+            return EXIT_INTEGRITY
+        if self.world.tick_in_progress is not None:
+            tick = self.world.tick_in_progress.tick
+            self.out.error(f"tick {tick} の処理が完了していない世界のため停止します")
             return EXIT_INTEGRITY
         if self._should_stop():
             return EXIT_OK

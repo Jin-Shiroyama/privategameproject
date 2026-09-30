@@ -704,6 +704,13 @@ def _parse_events(
         for i, e in enumerate(_as_list(_req(m, "events", path), f"{path}.events"))
     ]
     _unique_ids([e.id for e in events], f"{path}.events")
+    # 第①段階: 日次イベントはちょうど1件(複数の実行順は正本に規定がないため決めない)
+    daily = [e.id for e in events if e.trigger is EventTrigger.DAILY]
+    if len(daily) != 1:
+        raise DefinitionError(
+            f"{path}.events",
+            f"trigger: daily のイベントはちょうど1件必要です(現在 {len(daily)} 件: {daily})",
+        )
     return {e.id: e for e in events}
 
 

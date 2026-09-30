@@ -387,3 +387,25 @@ def test_broken_yaml_becomes_definition_error(tmp_path: Path, content_dir: Path)
     (target / "axes.yaml").write_text("axes: [\n  - id: x\n", encoding="utf-8")
     with pytest.raises(DefinitionError, match=r"axes\.yaml.*YAMLを読み込めません"):
         load_content_pack(target)
+
+
+# --- 日次イベントの件数(第①段階はちょうど1件) ---------------------------------------
+
+
+def test_daily_event_zero_is_rejected(mutated_pack: MakePack) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["events"] = [e for e in d["events"] if e.get("trigger") != "daily"]
+
+    _expect_error(mutated_pack, "events.yaml", mutate, r"ちょうど1件.*0 件")
+
+
+def test_daily_event_two_is_rejected(mutated_pack: MakePack) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        daily = next(e for e in d["events"] if e.get("trigger") == "daily")
+        d["events"].append({**daily, "id": "day_end"})
+
+    _expect_error(mutated_pack, "events.yaml", mutate, r"ちょうど1件.*2 件")
+
+
+def test_daily_event_found_by_trigger(pack: ContentPack) -> None:
+    assert [e.id for e in pack.daily_events()] == ["daily"]

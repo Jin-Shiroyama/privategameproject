@@ -279,6 +279,10 @@ class ContentPack:
     settings: Settings
     casters: tuple[CasterDef, ...]
 
+    def daily_events(self) -> tuple[EventDef, ...]:
+        """`trigger: daily` のイベント(定義順)。ローダ経由のパックではちょうど1件。"""
+        return tuple(e for e in self.events.values() if e.trigger is EventTrigger.DAILY)
+
     def find_template(self, result_kind: str, success: bool) -> TemplateDef | None:
         """結果種別と成否に対応するテンプレートを返す。成否指定ありを優先する。"""
         fallback: TemplateDef | None = None
